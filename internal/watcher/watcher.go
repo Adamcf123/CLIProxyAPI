@@ -800,7 +800,28 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 				continue
 			}
 			base := strings.TrimSpace(ck.BaseURL)
-			id, token := idGen.next("claude:apikey", key, base)
+			proxyURL := strings.TrimSpace(ck.ProxyURL)
+
+			provider := "claude"
+			label := "claude-apikey"
+			idKind := "claude:apikey"
+			lowerBase := strings.ToLower(base)
+			if lowerBase != "" {
+				switch {
+				case strings.Contains(lowerBase, "api.minimaxi.com/anthropic"):
+					provider = "minimax"
+					label = "minimax-via-claude"
+					idKind = "minimax:via-claude"
+				case strings.Contains(lowerBase, "open.bigmodel.cn/api/anthropic"):
+					provider = "zhipu"
+					label = "zhipu-via-claude"
+					idKind = "zhipu:via-claude"
+				case strings.Contains(lowerBase, "/api/anthropic"):
+					// Unknown Anthropic-compatible host: keep provider as claude
+				}
+			}
+
+			id, token := idGen.next(idKind, key, base, proxyURL)
 			attrs := map[string]string{
 				"source":  fmt.Sprintf("config:claude[%s]", token),
 				"api_key": key,
@@ -811,11 +832,14 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 			if hash := computeClaudeModelsHash(ck.Models); hash != "" {
 				attrs["models_hash"] = hash
 			}
-			proxyURL := strings.TrimSpace(ck.ProxyURL)
+			if provider == "zhipu" || provider == "minimax" {
+				attrs["bridge_provider"] = "claude"
+			}
+
 			a := &coreauth.Auth{
 				ID:         id,
-				Provider:   "claude",
-				Label:      "claude-apikey",
+				Provider:   provider,
+				Label:      label,
 				Status:     coreauth.StatusActive,
 				ProxyURL:   proxyURL,
 				Attributes: attrs,
