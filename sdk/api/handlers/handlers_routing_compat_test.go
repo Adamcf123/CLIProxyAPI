@@ -42,7 +42,7 @@ func (s spyExec) CountTokens(ctx context.Context, a *coreauth.Auth, req cliproxy
 
 func newBaseHandlerWithManager(m *coreauth.Manager) *basehandlers.BaseAPIHandler {
 	cfg := &sdkconfig.SDKConfig{}
-	h := basehandlers.NewBaseAPIHandlers(cfg, m)
+	h := basehandlers.NewBaseAPIHandlers(cfg, m, nil)
 	return h
 }
 

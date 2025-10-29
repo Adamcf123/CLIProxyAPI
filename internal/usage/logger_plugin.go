@@ -395,6 +395,24 @@ type tpsAggregator struct {
 
 var defaultTPSAggregator = &tpsAggregator{}
 
+// ResetTPSAggregatorForTest clears the global TPS aggregator state for test isolation.
+func ResetTPSAggregatorForTest() {
+	agg := defaultTPSAggregator
+	if agg == nil {
+		defaultTPSAggregator = &tpsAggregator{}
+		agg = defaultTPSAggregator
+	}
+	agg.mu.Lock()
+	agg.completion = nil
+	agg.total = nil
+	agg.completionSum = 0
+	agg.totalSum = 0
+	agg.completionTagged = nil
+	agg.totalTagged = nil
+	agg.mu.Unlock()
+	serverStart = time.Now()
+}
+
 // Cleanup configuration (can be tuned if needed)
 var (
 	tpsMaxRetention    = 24 * time.Hour

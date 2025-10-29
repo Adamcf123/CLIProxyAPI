@@ -55,10 +55,15 @@ func GetProviderName(modelName string) []string {
 
 	// If no dynamic providers were discovered, offer strict heuristic defaults.
 	lower := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.HasPrefix(lower, "glm-") {
+		// Ensure glm-* models resolve exclusively to zhipu even if other providers register them.
+		if _, exists := seen["zhipu"]; exists {
+			return []string{"zhipu"}
+		}
+		return []string{"zhipu"}
+	}
 	if len(providers) == 0 {
 		switch {
-		case strings.HasPrefix(lower, "glm-"):
-			return []string{"zhipu"}
 		case strings.HasPrefix(lower, "minimax-"):
 			return []string{"minimax"}
 		case strings.HasPrefix(lower, "claude-"):

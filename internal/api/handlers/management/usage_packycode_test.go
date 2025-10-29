@@ -15,6 +15,9 @@ import (
 func TestGetTPSAggregates_FilterByProviderAndModel_Packycode(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	usage.ResetTPSAggregatorForTest()
+	t.Cleanup(usage.ResetTPSAggregatorForTest)
+
 	// seed windowed samples
 	usage.RecordTPSSampleTagged("packycode", "gpt-5", 7.5, 8.1)
 	usage.RecordTPSSampleTagged("zhipu", "glm-4.6", 2.0, 2.2)

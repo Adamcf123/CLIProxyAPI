@@ -22,7 +22,7 @@ func TestOpenAIModels_IncludesPackycodeModels(t *testing.T) {
 		reg.UnregisterClient("packycode:test")
 	})
 
-	baseHandler := handlers2.NewBaseAPIHandlers(nil, nil)
+	baseHandler := handlers2.NewBaseAPIHandlers(nil, nil, nil)
 	openaiHandler := openai.NewOpenAIAPIHandler(baseHandler)
 
 	router := gin.New()

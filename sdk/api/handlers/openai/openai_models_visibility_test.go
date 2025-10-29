@@ -43,7 +43,7 @@ func TestOpenAIModels_ContainsZhipuAndMiniMaxModels(t *testing.T) {
 		registry.GetGlobalRegistry().UnregisterClient(mID)
 	})
 
-	base := handlers.NewBaseAPIHandlers(nil, nil)
+	base := handlers.NewBaseAPIHandlers(nil, nil, nil)
 	h := openai.NewOpenAIAPIHandler(base)
 
 	r := gin.New()

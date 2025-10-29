@@ -15,6 +15,9 @@ import (
 func TestGetTPSAggregates_FilterByProviderAndModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	usage.ResetTPSAggregatorForTest()
+	t.Cleanup(usage.ResetTPSAggregatorForTest)
+
 	// Prepare some tagged TPS samples within window
 	usage.RecordTPSSampleTagged("zhipu", "glm-4.6", 10.0, 12.0)
 	usage.RecordTPSSampleTagged("openai", "gpt-4o", 5.0, 6.0)

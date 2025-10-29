@@ -54,7 +54,7 @@ func TestOpenAIModels_AfterRegisterCopilotAuth_Visible(t *testing.T) {
 	t.Cleanup(func() { cliproxy.GlobalModelRegistry().UnregisterClient(a.ID) })
 
 	// 直接使用 OpenAI handler 断言 /v1/models 非空
-	base := handlers2.NewBaseAPIHandlers(nil, nil)
+	base := handlers2.NewBaseAPIHandlers(nil, nil, nil)
 	openaiHandler := openai.NewOpenAIAPIHandler(base)
 	r := gin.New()
 	r.GET("/v1/models", openaiHandler.OpenAIModels)
