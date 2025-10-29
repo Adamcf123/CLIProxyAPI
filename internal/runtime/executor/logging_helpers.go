@@ -4,20 +4,36 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 const (
 	apiAttemptsKey = "API_UPSTREAM_ATTEMPTS"
 	apiRequestKey  = "API_REQUEST"
 	apiResponseKey = "API_RESPONSE"
+
+	// log field keys
+	logKeyRequestID      = "request_id"
+	logKeyIsStreaming    = "is_streaming"
+	logKeyReqDurationSec = "request_duration_seconds"
+	logKeyStrDurationSec = "stream_duration_seconds"
+	logKeyInputTokens    = "input_tokens"
+	logKeyOutputTokens   = "output_tokens"
+	logKeyTotalTokens    = "total_tokens"
+	logKeyTPSCompletion  = "tps_completion"
+	logKeyTPSTotal       = "tps_total"
+	logKeyMeasuredAt     = "measured_at"
 )
 
 // upstreamRequestLog captures the outbound upstream request details for logging.
@@ -43,11 +59,18 @@ type upstreamAttempt struct {
 	bodyStarted          bool
 	bodyHasContent       bool
 	errorWritten         bool
+
+	// TPS measurement fields
+	requestedAt   time.Time
+	firstOutputAt time.Time
+	lastOutputAt  time.Time
+	inputTokens   int64
+	outputTokens  int64
 }
 
 // recordAPIRequest stores the upstream request metadata in Gin context for request logging.
 func recordAPIRequest(ctx context.Context, cfg *config.Config, info upstreamRequestLog) {
-	if cfg == nil || !cfg.RequestLog {
+	if cfg == nil || (!cfg.RequestLog && !cfg.CodexJSONCaptureOnly) {
 		return
 	}
 	ginCtx := ginContextFrom(ctx)
@@ -55,10 +78,112 @@ func recordAPIRequest(ctx context.Context, cfg *config.Config, info upstreamRequ
 		return
 	}
 
+	isCaptureOnly := cfg.CodexJSONCaptureOnly
+
+	// Special JSON capture for Codex/Packycode when model is gpt-5-codex*
+	// This stores the filtered upstream JSON body and related identifiers into Gin context
+	// for downstream consumers (e.g., response writer logger, debugging tools).
+	model := strings.TrimSpace(gjson.GetBytes(info.Body, "model").String())
+	isCodexProvider := strings.EqualFold(info.Provider, "codex") || strings.EqualFold(info.Provider, "packycode")
+	isCodexVariant := util.InArray([]string{"gpt-5-codex-low", "gpt-5-codex-medium", "gpt-5-codex-high"}, model)
+
+	if isCodexProvider && isCodexVariant {
+		inputs := gjson.GetBytes(info.Body, "input").Array()
+		var items []string
+		for i := range inputs {
+			it := inputs[i]
+			if !strings.EqualFold(it.Get("type").String(), "function_call") {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSpace(it.Get("name").String()))
+			if !(strings.Contains(name, "bash") || strings.Contains(name, "shell")) {
+				continue
+			}
+			var b strings.Builder
+			b.WriteString("{\"type\":\"function_call\",\"name\":")
+			b.WriteString(fmt.Sprintf("%q", it.Get("name").String()))
+			if v := it.Get("call_id"); v.Exists() {
+				b.WriteString(",\"call_id\":")
+				b.WriteString(v.Raw)
+			}
+			if v := it.Get("arguments"); v.Exists() {
+				b.WriteString(",\"arguments\":")
+				b.WriteString(v.Raw)
+			}
+			b.WriteString("}")
+			items = append(items, b.String())
+		}
+
+		instructions := strings.TrimSpace(gjson.GetBytes(info.Body, "instructions").String())
+		tools := gjson.GetBytes(info.Body, "tools").Array()
+		var bashTools []string
+		for i := range tools {
+			t := tools[i]
+			name := strings.ToLower(strings.TrimSpace(t.Get("name").String()))
+			if !(strings.Contains(name, "bash") || strings.Contains(name, "shell")) {
+				continue
+			}
+			var sb strings.Builder
+			sb.WriteString("{\"type\":\"function\",\"name\":")
+			sb.WriteString(fmt.Sprintf("%q", t.Get("name").String()))
+			if v := t.Get("description"); v.Exists() {
+				sb.WriteString(",\"description\":")
+				sb.WriteString(v.Raw)
+			}
+			if v := t.Get("parameters"); v.Exists() {
+				sb.WriteString(",\"parameters\":")
+				sb.WriteString(v.Raw)
+			}
+			sb.WriteString("}")
+			bashTools = append(bashTools, sb.String())
+		}
+
+		var filtered []byte
+		{
+			var sb strings.Builder
+			sb.WriteString("{")
+			sb.WriteString(fmt.Sprintf("\"model\":%q", model))
+			if instructions != "" {
+				sb.WriteString(",\"instructions\":")
+				sb.WriteString(fmt.Sprintf("%q", instructions))
+			}
+			if len(bashTools) > 0 {
+				sb.WriteString(",\"tools\":[")
+				sb.WriteString(strings.Join(bashTools, ","))
+				sb.WriteString("]")
+			}
+			if len(items) > 0 {
+				sb.WriteString(",\"input\":[")
+				sb.WriteString(strings.Join(items, ","))
+				sb.WriteString("]")
+			}
+			sb.WriteString("}")
+			filtered = []byte(sb.String())
+		}
+
+		ginCtx.Set("API_JSON_CAPTURE", filtered)
+		ginCtx.Set("API_JSON_CAPTURE_PROVIDER", strings.ToLower(info.Provider))
+		ginCtx.Set("API_JSON_CAPTURE_URL", info.URL)
+		ginCtx.Set("API_PROVIDER", strings.ToLower(info.Provider))
+		ginCtx.Set("API_MODEL_ID", model)
+
+		if isCaptureOnly {
+			return
+		}
+	} else if isCaptureOnly {
+		// Capture-only mode with non-Codex request: skip entirely.
+		return
+	}
+
+	if !cfg.RequestLog {
+		return
+	}
+
 	attempts := getAttempts(ginCtx)
 	index := len(attempts) + 1
 
 	builder := &strings.Builder{}
+	requestedAt := time.Now()
 	builder.WriteString(fmt.Sprintf("=== API REQUEST %d ===\n", index))
 	builder.WriteString(fmt.Sprintf("Timestamp: %s\n", time.Now().Format(time.RFC3339Nano)))
 	if info.URL != "" {
@@ -83,9 +208,10 @@ func recordAPIRequest(ctx context.Context, cfg *config.Config, info upstreamRequ
 	builder.WriteString("\n\n")
 
 	attempt := &upstreamAttempt{
-		index:    index,
-		request:  builder.String(),
-		response: &strings.Builder{},
+		index:       index,
+		request:     builder.String(),
+		response:    &strings.Builder{},
+		requestedAt: requestedAt,
 	}
 	attempts = append(attempts, attempt)
 	ginCtx.Set(apiAttemptsKey, attempts)
@@ -168,12 +294,18 @@ func appendAPIResponseChunk(ctx context.Context, cfg *config.Config, chunk []byt
 	if !attempt.bodyStarted {
 		attempt.response.WriteString("Body:\n")
 		attempt.bodyStarted = true
+		// mark first output time when body begins
+		if attempt.firstOutputAt.IsZero() {
+			attempt.firstOutputAt = time.Now()
+		}
 	}
 	if attempt.bodyHasContent {
 		attempt.response.WriteString("\n\n")
 	}
 	attempt.response.WriteString(string(data))
 	attempt.bodyHasContent = true
+	// update last output time for streaming window
+	attempt.lastOutputAt = time.Now()
 
 	updateAggregatedResponse(ginCtx, attempts)
 }
@@ -253,6 +385,93 @@ func updateAggregatedResponse(ginCtx *gin.Context, attempts []*upstreamAttempt) 
 		}
 	}
 	ginCtx.Set(apiResponseKey, []byte(builder.String()))
+
+	// Emit structured TPS metrics to global logger (log-only, not response)
+	if len(attempts) > 0 {
+		// Check dedicated TPS gate as well as general request log
+		var cfg *config.Config
+		if cfgAny, ok := ginCtx.Get("config"); ok {
+			if c, ok2 := cfgAny.(*config.Config); ok2 {
+				cfg = c
+			}
+		}
+		if cfg != nil && !cfg.TPSLog {
+			return
+		}
+		last := attempts[len(attempts)-1]
+		// compute windows
+		var (
+			reqWindowSec    float64
+			streamWindowSec float64
+		)
+		if !last.requestedAt.IsZero() {
+			reqWindowSec = time.Since(last.requestedAt).Seconds()
+		}
+		if !last.firstOutputAt.IsZero() && !last.lastOutputAt.IsZero() {
+			streamWindowSec = last.lastOutputAt.Sub(last.firstOutputAt).Seconds()
+		}
+		// compute TPS with guards and round to 2 decimals
+		var tpsCompletion float64
+		if last.outputTokens <= 0 {
+			// no outputs → define as 0.00 (explicit per spec)
+			tpsCompletion = 0
+		} else {
+			window := streamWindowSec
+			if window <= 0 {
+				// fallback to request window for non-stream responses
+				window = reqWindowSec
+			}
+			if window > 0 {
+				tpsCompletion = round2(float64(last.outputTokens) / window)
+			}
+		}
+		var tpsTotal float64
+		if reqWindowSec > 0 && (last.inputTokens+last.outputTokens) > 0 {
+			tpsTotal = round2(float64(last.inputTokens+last.outputTokens) / reqWindowSec)
+		}
+		// expose latest TPS values on Gin context; sample recording happens at request finalization
+		ginCtx.Set("API_TPS_COMPLETION", tpsCompletion)
+		ginCtx.Set("API_TPS_TOTAL", tpsTotal)
+		// fetch optional provider/model from context for logging enrichment
+		var provider, model string
+		if v, ok := ginCtx.Get("API_PROVIDER"); ok {
+			if s, ok2 := v.(string); ok2 {
+				provider = s
+			}
+		}
+		if v, ok := ginCtx.Get("API_MODEL_ID"); ok {
+			if s, ok2 := v.(string); ok2 {
+				model = s
+			}
+		}
+
+		// generate request id if missing
+		rid := uuid.New().String()
+		// Reuse global logging module (same formatter and outputs)
+		log.WithFields(log.Fields{
+			logKeyRequestID:      rid,
+			logKeyIsStreaming:    !last.firstOutputAt.IsZero(),
+			logKeyReqDurationSec: round2(reqWindowSec),
+			logKeyStrDurationSec: round2(streamWindowSec),
+			logKeyInputTokens:    last.inputTokens,
+			logKeyOutputTokens:   last.outputTokens,
+			logKeyTotalTokens:    last.inputTokens + last.outputTokens,
+			logKeyTPSCompletion:  round2(tpsCompletion),
+			logKeyTPSTotal:       round2(tpsTotal),
+			logKeyMeasuredAt:     time.Now().Format(time.RFC3339Nano),
+			// provider/model enrichment for per-request-tps log
+			"provider":       provider,
+			"model":          model,
+			"provider_model": strings.Trim(strings.Join([]string{provider, model}, "/"), "/"),
+		}).Info("per-request-tps")
+	}
+}
+
+func round2(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return math.Round(v*100) / 100
 }
 
 func writeHeaders(builder *strings.Builder, headers http.Header) {

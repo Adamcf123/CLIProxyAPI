@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -152,6 +153,11 @@ func (MyExecutor) CountTokens(ctx context.Context, a *coreauth.Auth, req clipexe
 
 func (MyExecutor) Refresh(ctx context.Context, a *coreauth.Auth) (*coreauth.Auth, error) {
 	return a, nil
+}
+
+func (MyExecutor) CountTokens(ctx context.Context, a *coreauth.Auth, req clipexec.Request, opts clipexec.Options) (clipexec.Response, error) {
+	count := len(req.Payload)
+	return clipexec.Response{Payload: []byte(fmt.Sprintf(`{"count":%d}`, count))}, nil
 }
 
 func main() {

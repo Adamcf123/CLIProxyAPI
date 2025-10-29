@@ -32,6 +32,9 @@ logging-to-file: false
 # When false, disable in-memory usage statistics aggregation
 usage-statistics-enabled: false
 
+# Only capture Codex bash JSON to separate files; suppress all other request logs
+codex-json-capture-only: false
+
 # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/
 proxy-url: ""
 
@@ -85,3 +88,34 @@ ws-auth: false
 #    models: # The models supported by the provider.
 #      - name: "moonshotai/kimi-k2:free" # The actual model name.
 #        alias: "kimi-k2" # The alias used in the API.
+
+# GitHub Copilot OAuth (optional). Defaults are embedded so this block is not required.
+#copilot-oauth:
+#  auth-url: "https://github.com/login/oauth/authorize"
+#  token-url: "https://github.com/login/oauth/access_token"
+#  client-id: "<GitHub OAuth App Client ID>"
+#  redirect-port: 54556
+#  scope: "openid email profile offline_access"
+#  github-base-url: "https://github.com"
+#  github-api-base-url: "https://api.github.com"
+#  github-client-id: "<GitHub Device Flow Client ID>"
+
+# Copilot runtime tuning knobs (optional)
+copilot:
+  refresh-safety-margin-seconds: 60
+
+# Packycode (optional): forward Claude Code compatible requests to the Packycode upstream
+#packycode:
+#  enabled: false
+#  base-url: "https://codex-api.packycode.com/v1"
+#  requires-openai-auth: true
+#  wire-api: "responses" # fixed value
+#  privacy:
+#    disable-response-storage: true
+#  defaults:
+#    model: "gpt-5"
+#    model-reasoning-effort: "high" # one of: low|medium|high
+#  credentials:
+#    openai-api-key: "sk-OPENAI-XXXX..."
+
+# 注：已移除对外部 Python 侧组件的集成；请直接配置 zhipu 或兼容端点直连参数。

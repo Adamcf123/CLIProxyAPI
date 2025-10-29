@@ -54,10 +54,20 @@ type ServerOption func(*serverOptionConfig)
 
 func defaultRequestLoggerFactory(cfg *config.Config, configPath string) logging.RequestLogger {
 	configDir := filepath.Dir(configPath)
+	enabled := cfg.RequestLog || cfg.CodexJSONCaptureOnly
+	var logger logging.RequestLogger
 	if base := util.WritablePath(); base != "" {
-		return logging.NewFileRequestLogger(cfg.RequestLog, filepath.Join(base, "logs"), configDir)
+		logger = logging.NewFileRequestLogger(enabled, filepath.Join(base, "logs"), configDir)
+	} else {
+		logger = logging.NewFileRequestLogger(enabled, "logs", configDir)
 	}
-	return logging.NewFileRequestLogger(cfg.RequestLog, "logs", configDir)
+	if setter, ok := logger.(interface{ SetEnabled(bool) }); ok {
+		setter.SetEnabled(enabled)
+	}
+	if captureSetter, ok := logger.(interface{ SetCaptureOnly(bool) }); ok {
+		captureSetter.SetCaptureOnly(cfg.CodexJSONCaptureOnly)
+	}
+	return logger
 }
 
 // WithMiddleware appends additional Gin middleware during server construction.
@@ -130,8 +140,9 @@ type Server struct {
 	accessManager *sdkaccess.Manager
 
 	// requestLogger is the request logger instance for dynamic configuration updates.
-	requestLogger logging.RequestLogger
-	loggerToggle  func(bool)
+	requestLogger       logging.RequestLogger
+	loggerToggle        func(bool)
+	loggerCaptureToggle func(bool)
 
 	// configFilePath is the absolute path to the YAML config file for persistence.
 	configFilePath string
@@ -204,6 +215,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Resolve logs directory relative to the configuration file directory.
 	var requestLogger logging.RequestLogger
 	var toggle func(bool)
+	var captureToggle func(bool)
 	if optionState.requestLoggerFactory != nil {
 		requestLogger = optionState.requestLoggerFactory(cfg, configFilePath)
 	}
@@ -211,6 +223,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
 		if setter, ok := requestLogger.(interface{ SetEnabled(bool) }); ok {
 			toggle = setter.SetEnabled
+		}
+		if captureSetter, ok := requestLogger.(interface{ SetCaptureOnly(bool) }); ok {
+			captureSetter.SetCaptureOnly(cfg.CodexJSONCaptureOnly)
+			captureToggle = captureSetter.SetCaptureOnly
 		}
 	}
 
@@ -236,11 +252,66 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		accessManager:       accessManager,
 		requestLogger:       requestLogger,
 		loggerToggle:        toggle,
+		loggerCaptureToggle: captureToggle,
 		configFilePath:      configFilePath,
 		currentPath:         wd,
 		envManagementSecret: envManagementSecret,
 		wsRoutes:            make(map[string]struct{}),
 	}
+
+	// Expose config pointer to Gin context for downstream middlewares/helpers
+	engine.Use(func(c *gin.Context) {
+		c.Set("config", cfg)
+		c.Next()
+	})
+
+	// TPS sample finalizer (records exactly once per /v1 request)
+	engine.Use(func(c *gin.Context) {
+		c.Next()
+		path := c.Request.URL.Path
+		if !strings.HasPrefix(path, "/v1") {
+			return
+		}
+		if recordedAny, ok := c.Get("API_TPS_RECORDED"); ok {
+			if b, ok2 := recordedAny.(bool); ok2 && b {
+				return
+			}
+		}
+		var completion, total float64
+		var have bool
+		if v, ok := c.Get("API_TPS_COMPLETION"); ok {
+			if f, ok2 := v.(float64); ok2 {
+				completion = f
+				have = true
+			}
+		}
+		if v, ok := c.Get("API_TPS_TOTAL"); ok {
+			if f, ok2 := v.(float64); ok2 {
+				total = f
+				have = true
+			}
+		}
+		if have {
+			// optional provider/model attribution
+			var provider, model string
+			if v, ok := c.Get("API_PROVIDER"); ok {
+				if s, ok2 := v.(string); ok2 {
+					provider = s
+				}
+			}
+			if v, ok := c.Get("API_MODEL_ID"); ok {
+				if s, ok2 := v.(string); ok2 {
+					model = s
+				}
+			}
+			if provider != "" || model != "" {
+				usage.RecordTPSSampleTagged(provider, model, completion, total)
+			} else {
+				usage.RecordTPSSample(completion, total)
+			}
+			c.Set("API_TPS_RECORDED", true)
+		}
+	})
 	s.wsAuthEnabled.Store(cfg.WebsocketAuth)
 	// Save initial YAML snapshot
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
@@ -369,6 +440,19 @@ func (s *Server) setupRoutes() {
 		c.String(http.StatusOK, oauthCallbackSuccessHTML)
 	})
 
+	// Copilot OAuth callback endpoint
+	s.engine.GET("/copilot/callback", func(c *gin.Context) {
+		code := c.Query("code")
+		state := c.Query("state")
+		errStr := c.Query("error")
+		if state != "" {
+			file := fmt.Sprintf("%s/.oauth-copilot-%s.oauth", s.cfg.AuthDir, state)
+			_ = os.WriteFile(file, []byte(fmt.Sprintf(`{"code":"%s","state":"%s","error":"%s"}`, code, state, errStr)), 0o600)
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, oauthCallbackSuccessHTML)
+	})
+
 	s.engine.GET("/iflow/callback", func(c *gin.Context) {
 		code := c.Query("code")
 		state := c.Query("state")
@@ -435,6 +519,7 @@ func (s *Server) registerManagementRoutes() {
 	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
 	{
 		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
+		mgmt.GET("/tps", s.mgmt.GetTPSAggregates)
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigFile)
@@ -480,9 +565,22 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/request-log", s.mgmt.PutRequestLog)
 		mgmt.PATCH("/request-log", s.mgmt.PutRequestLog)
 
+		// Codex JSON capture only
+		mgmt.GET("/codex-json-capture-only", s.mgmt.GetCodexJSONCaptureOnly)
+		mgmt.PUT("/codex-json-capture-only", s.mgmt.PutCodexJSONCaptureOnly)
+		mgmt.PATCH("/codex-json-capture-only", s.mgmt.PutCodexJSONCaptureOnly)
+
+		mgmt.GET("/tps-log", s.mgmt.GetTPSLog)
+		mgmt.PUT("/tps-log", s.mgmt.PutTPSLog)
+		mgmt.PATCH("/tps-log", s.mgmt.PutTPSLog)
+
 		mgmt.GET("/request-retry", s.mgmt.GetRequestRetry)
 		mgmt.PUT("/request-retry", s.mgmt.PutRequestRetry)
 		mgmt.PATCH("/request-retry", s.mgmt.PutRequestRetry)
+
+		// providers/models listing for management UI
+		mgmt.GET("/providers", s.mgmt.GetProviders)
+		mgmt.GET("/models", s.mgmt.GetModels)
 
 		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
 		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
@@ -494,10 +592,21 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/codex-api-key", s.mgmt.PatchCodexKey)
 		mgmt.DELETE("/codex-api-key", s.mgmt.DeleteCodexKey)
 
+		// zhipu-api-key management
+		mgmt.GET("/zhipu-api-key", s.mgmt.GetZhipuKeys)
+		mgmt.PUT("/zhipu-api-key", s.mgmt.PutZhipuKeys)
+		mgmt.PATCH("/zhipu-api-key", s.mgmt.PatchZhipuKey)
+		mgmt.DELETE("/zhipu-api-key", s.mgmt.DeleteZhipuKey)
+
 		mgmt.GET("/openai-compatibility", s.mgmt.GetOpenAICompat)
 		mgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
 		mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
 		mgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
+
+		// Packycode management
+		mgmt.GET("/packycode", s.mgmt.GetPackycode)
+		mgmt.PUT("/packycode", s.mgmt.PutPackycode)
+		mgmt.PATCH("/packycode", s.mgmt.PatchPackycode)
 
 		mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
 		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
@@ -509,6 +618,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
 		mgmt.GET("/qwen-auth-url", s.mgmt.RequestQwenToken)
 		mgmt.GET("/iflow-auth-url", s.mgmt.RequestIFlowToken)
+		// GitHub Device Flow for Copilot (no callback required)
+		mgmt.GET("/copilot-device-code", s.mgmt.RequestCopilotDeviceCode)
+		mgmt.GET("/copilot-device-status", s.mgmt.GetCopilotDeviceStatus)
+		mgmt.GET("/copilot-auth-url", s.mgmt.RequestCopilotToken)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 	}
 }
@@ -739,14 +852,29 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	}
 	if s.requestLogger != nil && (oldCfg == nil || previousRequestLog != cfg.RequestLog) {
 		if s.loggerToggle != nil {
-			s.loggerToggle(cfg.RequestLog)
+			s.loggerToggle(cfg.RequestLog || cfg.CodexJSONCaptureOnly)
 		} else if toggler, ok := s.requestLogger.(interface{ SetEnabled(bool) }); ok {
-			toggler.SetEnabled(cfg.RequestLog)
+			toggler.SetEnabled(cfg.RequestLog || cfg.CodexJSONCaptureOnly)
 		}
 		if oldCfg != nil {
 			log.Debugf("request logging updated from %t to %t", previousRequestLog, cfg.RequestLog)
 		} else {
 			log.Debugf("request logging toggled to %t", cfg.RequestLog)
+		}
+	}
+
+	// Update capture-only toggle when changed
+	if s.requestLogger != nil {
+		prevCapture := false
+		if oldCfg != nil {
+			prevCapture = oldCfg.CodexJSONCaptureOnly
+		}
+		if oldCfg == nil || prevCapture != cfg.CodexJSONCaptureOnly {
+			if s.loggerCaptureToggle != nil {
+				s.loggerCaptureToggle(cfg.CodexJSONCaptureOnly)
+			} else if captureSetter, ok := s.requestLogger.(interface{ SetCaptureOnly(bool) }); ok {
+				captureSetter.SetCaptureOnly(cfg.CodexJSONCaptureOnly)
+			}
 		}
 	}
 
@@ -860,14 +988,20 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		openAICompatCount += len(entry.APIKeys)
 	}
 
-	total := authFiles + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
-	fmt.Printf("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)\n",
+	packycodeCount := 0
+	if cfg.Packycode.Enabled && strings.TrimSpace(cfg.Packycode.BaseURL) != "" {
+		packycodeCount = 1
+	}
+
+	total := authFiles + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount + packycodeCount
+	fmt.Printf("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat + %d Packycode)\n",
 		total,
 		authFiles,
 		glAPIKeyCount,
 		claudeAPIKeyCount,
 		codexAPIKeyCount,
 		openAICompatCount,
+		packycodeCount,
 	)
 }
 

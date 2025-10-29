@@ -48,12 +48,22 @@ func GetProviderName(modelName string) []string {
 		providers = append(providers, name)
 	}
 
+	// Prefer providers registered in the global model registry (dynamic detection)
 	for _, provider := range registry.GetGlobalRegistry().GetModelProviders(modelName) {
 		appendProvider(provider)
 	}
 
-	if len(providers) > 0 {
-		return providers
+	// If no dynamic providers were discovered, offer strict heuristic defaults.
+	lower := strings.ToLower(strings.TrimSpace(modelName))
+	if len(providers) == 0 {
+		switch {
+		case strings.HasPrefix(lower, "glm-"):
+			return []string{"zhipu"}
+		case strings.HasPrefix(lower, "minimax-"):
+			return []string{"minimax"}
+		case strings.HasPrefix(lower, "claude-"):
+			return []string{"claude"}
+		}
 	}
 
 	return providers

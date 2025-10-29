@@ -5,8 +5,11 @@ package cliproxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -25,6 +28,16 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
+
+var copilotExclusiveModelIDs = map[string]struct{}{
+	"gpt-5-mini":       {},
+	"grok-code-fast-1": {},
+	"gpt-5":            {},
+	"gpt-4.1":          {},
+	"gpt-4":            {},
+	"gpt-4o-mini":      {},
+	"gpt-3.5-turbo":    {},
+}
 
 // Service wraps the proxy server lifecycle so external programs can embed the CLI proxy.
 // It manages the complete lifecycle including authentication, file watching, HTTP server,
@@ -80,6 +93,8 @@ type Service struct {
 
 	// coreManager handles core authentication and execution.
 	coreManager *coreauth.Manager
+
+	// Python bridge removed
 
 	// shutdownOnce ensures shutdown is called only once.
 	shutdownOnce sync.Once
@@ -248,6 +263,22 @@ func (s *Service) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.A
 	}
 	auth = auth.Clone()
 	s.ensureExecutorsForAuth(auth)
+	// Diagnostics: preview effective base_url for copilot (masked)
+	if strings.EqualFold(strings.TrimSpace(auth.Provider), "copilot") {
+		if preview := copilotBaseURLPreview(auth); preview != "" {
+			log.Infof("copilot auth registered: id=%s base_url=%s", auth.ID, preview)
+		}
+		// Defensive: when auth.Attributes.base_url points to a codex backend path, it cannot
+		// serve Copilot chat/completions and often returns 401. Clear it so executor falls back
+		// to the canonical https://api.githubcopilot.com host. Explicit non-codex base_url is kept.
+		if auth.Attributes != nil {
+			if raw := strings.TrimSpace(auth.Attributes["base_url"]); raw != "" {
+				if strings.HasSuffix(strings.TrimRight(raw, "/"), "/backend-api/codex") {
+					delete(auth.Attributes, "base_url")
+				}
+			}
+		}
+	}
 	s.registerModelsForAuth(auth)
 	if existing, ok := s.coreManager.GetByID(auth.ID); ok && existing != nil {
 		auth.CreatedAt = existing.CreatedAt
@@ -327,9 +358,19 @@ func (s *Service) ensureExecutorsForAuth(a *coreauth.Auth) {
 	case "claude":
 		s.coreManager.RegisterExecutor(executor.NewClaudeExecutor(s.cfg))
 	case "codex":
-		s.coreManager.RegisterExecutor(executor.NewCodexExecutor(s.cfg))
+		s.coreManager.RegisterExecutor(executor.NewCodexExecutorWithID(s.cfg, "codex"))
+	case "packycode":
+		// 外部 provider=packycode → 内部复用 codex 执行器
+		s.coreManager.RegisterExecutor(executor.NewCodexExecutorWithID(s.cfg, "packycode"))
+	case "copilot":
+		// Copilot 使用独立的执行器以便与 Codex 路径解耦
+		s.coreManager.RegisterExecutor(executor.NewCopilotExecutor(s.cfg))
 	case "qwen":
 		s.coreManager.RegisterExecutor(executor.NewQwenExecutor(s.cfg))
+	case "zhipu":
+		s.coreManager.RegisterExecutor(executor.NewZhipuExecutor(s.cfg))
+	case "minimax":
+		s.coreManager.RegisterExecutor(executor.NewMiniMaxExecutor(s.cfg))
 	case "iflow":
 		s.coreManager.RegisterExecutor(executor.NewIFlowExecutor(s.cfg))
 	default:
@@ -350,6 +391,82 @@ func (s *Service) rebindExecutors() {
 	for _, auth := range auths {
 		s.ensureExecutorsForAuth(auth)
 	}
+}
+
+// copilotBaseURLPreview computes a safe-to-log preview of the effective base URL for Copilot.
+// Priority: attributes.base_url > metadata.base_url > derive from access_token.proxy-ep.
+// The returned value is masked to scheme+host only (e.g., https://proxy.example.com).
+func copilotBaseURLPreview(a *coreauth.Auth) string {
+	if a == nil {
+		return ""
+	}
+	// 1) Attributes
+	if a.Attributes != nil {
+		if v := strings.TrimSpace(a.Attributes["base_url"]); v != "" {
+			if host := maskURLHost(v); host != "" {
+				return host
+			}
+		}
+	}
+	// 2) Metadata
+	if a.Metadata != nil {
+		if v, ok := a.Metadata["base_url"].(string); ok {
+			if host := maskURLHost(v); host != "" {
+				return host
+			}
+		}
+		// 3) Derive from access_token proxy-ep
+		if v, ok := a.Metadata["access_token"].(string); ok {
+			if derived := deriveCopilotBaseFromTokenPreview(v); derived != "" {
+				if host := maskURLHost(derived); host != "" {
+					return host
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// deriveCopilotBaseFromTokenPreview extracts a base like https://<proxy-ep>/backend-api/codex from token when possible.
+func deriveCopilotBaseFromTokenPreview(tok string) string {
+	tok = strings.TrimSpace(tok)
+	if tok == "" {
+		return ""
+	}
+	const marker = "proxy-ep="
+	idx := strings.Index(tok, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := tok[idx+len(marker):]
+	if end := strings.IndexByte(rest, ';'); end >= 0 {
+		rest = rest[:end]
+	}
+	ep := strings.TrimSpace(rest)
+	if ep == "" {
+		return ""
+	}
+	if !strings.Contains(ep, "://") {
+		ep = "https://" + ep
+	}
+	ep = strings.TrimRight(ep, "/")
+	if !strings.HasSuffix(ep, "/backend-api/codex") {
+		ep += "/backend-api/codex"
+	}
+	return ep
+}
+
+// maskURLHost reduces a URL to scheme://host for safe logging; returns empty on parse failure.
+func maskURLHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // Run starts the service and blocks until the context is cancelled or the server stops.
@@ -387,6 +504,7 @@ func (s *Service) Run(ctx context.Context) error {
 		if errLoad := s.coreManager.Load(ctx); errLoad != nil {
 			log.Warnf("failed to load auth store: %v", errLoad)
 		}
+		s.rebindExecutors()
 	}
 
 	tokenResult, err := s.tokenProvider.Load(ctx, s.cfg)
@@ -413,6 +531,8 @@ func (s *Service) Run(ctx context.Context) error {
 	if s.authManager == nil {
 		s.authManager = newDefaultAuthManager()
 	}
+
+	// Python bridge removed
 
 	s.ensureWebsocketGateway()
 	if s.server != nil && s.wsGateway != nil {
@@ -455,6 +575,12 @@ func (s *Service) Run(ctx context.Context) error {
 		s.hooks.OnAfterStart(s)
 	}
 
+	// Ensure Packycode and Copilot models are registered for /v1/models visibility
+	s.ensurePackycodeModelsRegistered(s.cfg)
+	s.ensureCopilotModelsRegistered(s.cfg)
+	// Enforce Codex toggle based on Packycode state
+	s.enforceCodexToggle(s.cfg)
+
 	var watcherWrapper *WatcherWrapper
 	reloadCallback := func(newCfg *config.Config) {
 		if newCfg == nil {
@@ -471,7 +597,12 @@ func (s *Service) Run(ctx context.Context) error {
 		s.cfgMu.Lock()
 		s.cfg = newCfg
 		s.cfgMu.Unlock()
+		// Keep model registry in sync for Packycode and Copilot
+		s.ensurePackycodeModelsRegistered(newCfg)
+		s.ensureCopilotModelsRegistered(newCfg)
 		s.rebindExecutors()
+		// Re-apply codex toggle on config changes
+		s.enforceCodexToggle(newCfg)
 	}
 
 	watcherWrapper, err = s.watcherFactory(s.configPath, s.cfg.AuthDir, reloadCallback)
@@ -554,6 +685,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			s.authQueueStop = nil
 		}
 
+		// Python bridge removed
+
 		// no legacy clients to persist
 
 		if s.server != nil {
@@ -570,6 +703,149 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		usage.StopDefault()
 	})
 	return shutdownErr
+}
+
+// packycodeModelsClientID computes a stable registry client ID for Packycode models
+// based on base-url and openai api key. Returns (id, true) when packycode is enabled
+// and configuration is valid; otherwise ("", false).
+func (s *Service) packycodeModelsClientID(cfg *config.Config) (string, bool) {
+	if cfg == nil || !cfg.Packycode.Enabled {
+		return "", false
+	}
+	if err := config.ValidatePackycode(cfg); err != nil {
+		return "", false
+	}
+	base := strings.TrimSpace(cfg.Packycode.BaseURL)
+	key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
+	h := sha256.New()
+	h.Write([]byte("packycode:models"))
+	h.Write([]byte{0})
+	h.Write([]byte(base))
+	h.Write([]byte{0})
+	h.Write([]byte(key))
+	digest := hex.EncodeToString(h.Sum(nil))
+	if len(digest) > 12 {
+		digest = digest[:12]
+	}
+	return "packycode:models:" + digest, true
+}
+
+// ensurePackycodeModelsRegistered registers/unregisters Packycode OpenAI models
+// in the global model registry depending on current configuration state.
+func (s *Service) ensurePackycodeModelsRegistered(cfg *config.Config) {
+	id, ok := s.packycodeModelsClientID(cfg)
+	if !ok {
+		// Best-effort removal using deterministic ID if any
+		// Build ID ignoring enabled flag to attempt cleanup when toggled off
+		base := strings.TrimSpace(cfg.Packycode.BaseURL)
+		key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
+		h := sha256.New()
+		h.Write([]byte("packycode:models"))
+		h.Write([]byte{0})
+		h.Write([]byte(base))
+		h.Write([]byte{0})
+		h.Write([]byte(key))
+		digest := hex.EncodeToString(h.Sum(nil))
+		if len(digest) > 12 {
+			digest = digest[:12]
+		}
+		if digest != "" {
+			GlobalModelRegistry().UnregisterClient("packycode:models:" + digest)
+		}
+		return
+	}
+	// Ensure executor exists early to avoid executor_not_found
+	if s.coreManager != nil {
+		// Register codex executor but expose provider name as 'packycode' via alias (handled in ensureExecutorsForAuth)
+		s.coreManager.RegisterExecutor(executor.NewCodexExecutorWithID(s.cfg, "packycode"))
+	}
+	models := registry.GetOpenAIModels()
+	models = filterModelsByID(models, copilotExclusiveModelIDs)
+	// Register models under external provider key 'packycode' (internally still served by codex executor)
+	GlobalModelRegistry().RegisterClient(id, "packycode", models)
+	// Also ensure there is at least one runtime auth for provider 'packycode'
+	if s.coreManager != nil {
+		base := strings.TrimSpace(cfg.Packycode.BaseURL)
+		key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
+		// Derive a stable auth ID similar to watcher synth rule
+		ah := sha256.New()
+		ah.Write([]byte("packycode:codex"))
+		ah.Write([]byte{0})
+		ah.Write([]byte(key))
+		ah.Write([]byte{0})
+		ah.Write([]byte(base))
+		ad := hex.EncodeToString(ah.Sum(nil))
+		if len(ad) > 12 {
+			ad = ad[:12]
+		}
+		authID := "packycode:codex:" + ad
+		now := time.Now()
+		runtimeAuth := &coreauth.Auth{
+			ID:         authID,
+			Provider:   "packycode",
+			Label:      "packycode",
+			Status:     coreauth.StatusActive,
+			Attributes: map[string]string{"api_key": key, "base_url": base, "source": "packycode"},
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		// Register or update
+		if _, ok := s.coreManager.GetByID(authID); ok {
+			_, _ = s.coreManager.Update(context.Background(), runtimeAuth)
+		} else {
+			_, _ = s.coreManager.Register(context.Background(), runtimeAuth)
+		}
+	}
+}
+
+// enforceCodexToggle disables or re-enables codex auths according to packycode.enabled.
+// When packycode is enabled: disable all provider=codex auths and mark attribute toggle_by=packycode.
+// When packycode is disabled: re-enable only those codex auths previously disabled by this toggle.
+func (s *Service) enforceCodexToggle(cfg *config.Config) {
+	if s == nil || s.coreManager == nil || cfg == nil {
+		return
+	}
+	enableCodex := !cfg.Packycode.Enabled
+	auths := s.coreManager.List()
+	now := time.Now()
+	for _, a := range auths {
+		if a == nil || !strings.EqualFold(a.Provider, "codex") {
+			continue
+		}
+		// Ensure attributes map exists
+		if a.Attributes == nil {
+			a.Attributes = make(map[string]string)
+		}
+		toggledBy := strings.TrimSpace(a.Attributes["toggle_by"])
+		if !enableCodex {
+			// packycode enabled -> disable codex
+			if a.Disabled {
+				// already disabled, keep mark
+				if toggledBy == "" {
+					a.Attributes["toggle_by"] = "packycode"
+				}
+			} else {
+				a.Disabled = true
+				a.Status = coreauth.StatusDisabled
+				a.Attributes["toggle_by"] = "packycode"
+				a.UpdatedAt = now
+			}
+		} else {
+			// packycode disabled -> re-enable codex only if disabled by packycode
+			if a.Disabled && strings.EqualFold(toggledBy, "packycode") {
+				a.Disabled = false
+				a.Status = coreauth.StatusActive
+				delete(a.Attributes, "toggle_by")
+				a.UpdatedAt = now
+			} else {
+				continue
+			}
+		}
+		// Persist via Update
+		_, _ = s.coreManager.Update(context.Background(), a)
+		// Re-register models for the auth to reflect provider availability
+		s.registerModelsForAuth(a)
+	}
 }
 
 func (s *Service) ensureAuthDir() error {
@@ -591,6 +867,37 @@ func (s *Service) ensureAuthDir() error {
 }
 
 // registerModelsForAuth (re)binds provider models in the global registry using the core auth ID as client identifier.
+// ensureCopilotModelsRegistered registers base Copilot inventory even before any auth is added,
+// so that /v1/models can advertise provider=copilot and its models. When a real copilot auth
+// appears, registerModelsForAuth will re-register with the auth ID, superseding this seed.
+func (s *Service) ensureCopilotModelsRegistered(cfg *config.Config) {
+	id := "copilot:models:seed"
+	models := registry.GetCopilotModels()
+	if len(models) == 0 {
+		registry.GetGlobalRegistry().UnregisterClient(id)
+		return
+	}
+	// Register under provider key 'copilot'
+	registry.GetGlobalRegistry().RegisterClient(id, "copilot", models)
+}
+
+func filterModelsByID(models []*registry.ModelInfo, exclude map[string]struct{}) []*registry.ModelInfo {
+	if len(models) == 0 || len(exclude) == 0 {
+		return models
+	}
+	out := make([]*registry.ModelInfo, 0, len(models))
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		if _, blocked := exclude[strings.TrimSpace(model.ID)]; blocked {
+			continue
+		}
+		out = append(out, model)
+	}
+	return out
+}
+
 func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	if a == nil || a.ID == "" {
 		return
@@ -617,16 +924,55 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	case "aistudio":
 		models = registry.GetAIStudioModels()
 	case "claude":
+		// 检测：当 claude 的 base_url 指向特定 Anthropic 兼容端点时，按后端仅注册对应模型，并将 provider 标记为对应专属执行器（zhipu/minimax）
+		if a.Attributes != nil {
+			if v := strings.TrimSpace(a.Attributes["base_url"]); v != "" {
+				// 智谱 Anthropic 兼容 → provider=zhipu，模型=glm-4.6
+				if strings.EqualFold(v, "https://open.bigmodel.cn/api/anthropic") {
+					z := registry.GetZhipuModels()
+					only := make([]*ModelInfo, 0, 1)
+					for i := range z {
+						if z[i] != nil && strings.TrimSpace(z[i].ID) == "glm-4.6" {
+							only = append(only, z[i])
+							break
+						}
+					}
+					GlobalModelRegistry().RegisterClient(a.ID, "zhipu", only)
+					return
+				}
+				// MiniMax Anthropic 兼容 → provider=minimax，模型=MiniMax-M2
+				if strings.EqualFold(v, "https://api.minimaxi.com/anthropic") {
+					mm := registry.GetMiniMaxModels()
+					only := make([]*ModelInfo, 0, 1)
+					for i := range mm {
+						if mm[i] != nil && strings.TrimSpace(mm[i].ID) == "MiniMax-M2" {
+							only = append(only, mm[i])
+							break
+						}
+					}
+					GlobalModelRegistry().RegisterClient(a.ID, "minimax", only)
+					return
+				}
+			}
+		}
 		models = registry.GetClaudeModels()
 		if entry := s.resolveConfigClaudeKey(a); entry != nil && len(entry.Models) > 0 {
 			models = buildClaudeConfigModels(entry)
 		}
 	case "codex":
-		models = registry.GetOpenAIModels()
+		models = filterModelsByID(registry.GetOpenAIModels(), copilotExclusiveModelIDs)
+	case "packycode":
+		// 对外 provider=packycode 映射到 OpenAI(GPT) 模型集合
+		models = filterModelsByID(registry.GetOpenAIModels(), copilotExclusiveModelIDs)
+	case "copilot":
+		// copilot 使用专属的清单（当前与 OpenAI 同步，后续可替换为真实 inventory）
+		models = registry.GetCopilotModels()
 	case "qwen":
 		models = registry.GetQwenModels()
 	case "iflow":
 		models = registry.GetIFlowModels()
+	case "zhipu":
+		models = registry.GetZhipuModels()
 	default:
 		// Handle OpenAI-compatibility providers by name using config
 		if s.cfg != nil {

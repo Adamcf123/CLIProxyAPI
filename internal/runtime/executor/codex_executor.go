@@ -31,12 +31,24 @@ var dataTag = []byte("data:")
 // CodexExecutor is a stateless executor for Codex (OpenAI Responses API entrypoint).
 // If api_key is unavailable on auth, it falls back to legacy via ClientAdapter.
 type CodexExecutor struct {
-	cfg *config.Config
+	identifier string
+	cfg        *config.Config
 }
 
-func NewCodexExecutor(cfg *config.Config) *CodexExecutor { return &CodexExecutor{cfg: cfg} }
+// NewCodexExecutor keeps upstream-compatible constructor, defaulting identifier to "codex".
+func NewCodexExecutor(cfg *config.Config) *CodexExecutor {
+	return &CodexExecutor{identifier: "codex", cfg: cfg}
+}
 
-func (e *CodexExecutor) Identifier() string { return "codex" }
+// NewCodexExecutorWithID allows custom identifier while preserving compatibility.
+func NewCodexExecutorWithID(cfg *config.Config, identifier string) *CodexExecutor {
+	if identifier == "" {
+		identifier = "codex"
+	}
+	return &CodexExecutor{identifier: identifier, cfg: cfg}
+}
+
+func (e *CodexExecutor) Identifier() string { return e.identifier }
 
 func (e *CodexExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error { return nil }
 
@@ -118,7 +130,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
 		appendAPIResponseChunk(ctx, e.cfg, b)
-		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, string(b))
+		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, safeErrorPreview(b))
 		err = statusErr{code: httpResp.StatusCode, msg: string(b)}
 		return resp, err
 	}
@@ -163,6 +175,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
+
 	to := sdktranslator.FromString("codex")
 	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), true)
 
@@ -233,7 +246,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			return nil, readErr
 		}
 		appendAPIResponseChunk(ctx, e.cfg, data)
-		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, string(data))
+		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, safeErrorPreview(data))
 		err = statusErr{code: httpResp.StatusCode, msg: string(data)}
 		return nil, err
 	}
@@ -459,6 +472,8 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	if auth == nil {
 		return nil, statusErr{code: 500, msg: "codex executor: auth is nil"}
 	}
+
+	// Default (Codex/OpenAI) refresh using refresh_token
 	var refreshToken string
 	if auth.Metadata != nil {
 		if v, ok := auth.Metadata["refresh_token"].(string); ok && v != "" {
@@ -493,6 +508,17 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	return auth, nil
 }
 
+// safeErrorPreview returns a redacted description of an error payload without exposing
+// user content. It preserves the original log format placeholder while providing
+// minimal diagnostics.
+func safeErrorPreview(b []byte) string {
+	if len(b) == 0 {
+		return "[empty]"
+	}
+	// Replace body with a redacted marker and length to aid debugging without content leakage.
+	return fmt.Sprintf("[redacted,len=%d]", len(b))
+}
+
 func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte) (*http.Request, error) {
 	var cache codexCache
 	if from == "claude" {
@@ -522,6 +548,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 
 func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string) {
 	r.Header.Set("Content-Type", "application/json")
+	// Use Authorization Bearer for every provider (Codex/OpenAI-aligned)
 	r.Header.Set("Authorization", "Bearer "+token)
 
 	var ginHeaders http.Header
@@ -556,14 +583,59 @@ func codexCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
 	if a == nil {
 		return "", ""
 	}
+	// Prefer attributes when explicitly provided (e.g., api_key/base_url via management API)
 	if a.Attributes != nil {
 		apiKey = a.Attributes["api_key"]
 		baseURL = a.Attributes["base_url"]
 	}
-	if apiKey == "" && a.Metadata != nil {
-		if v, ok := a.Metadata["access_token"].(string); ok {
-			apiKey = v
+	// Fallback to persisted metadata from auth JSON
+	if a.Metadata != nil {
+		if apiKey == "" {
+			if v, ok := a.Metadata["access_token"].(string); ok {
+				apiKey = v
+			}
+		}
+		// Some flows persist base_url into metadata rather than attributes.
+		if baseURL == "" {
+			if v, ok := a.Metadata["base_url"].(string); ok {
+				baseURL = v
+			}
 		}
 	}
 	return
+}
+
+func translateForCodex(from sdktranslator.Format, model string, payload []byte, stream bool) []byte {
+	to := sdktranslator.FromString("codex")
+	body := sdktranslator.TranslateRequest(from, to, model, bytes.Clone(payload), stream)
+	if util.InArray([]string{"gpt-5", "gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, model) {
+		body, _ = sjson.SetBytes(body, "model", "gpt-5")
+		switch model {
+		case "gpt-5-minimal":
+			body, _ = sjson.SetBytes(body, "reasoning.effort", "minimal")
+		case "gpt-5-low":
+			body, _ = sjson.SetBytes(body, "reasoning.effort", "low")
+		case "gpt-5-medium":
+			body, _ = sjson.SetBytes(body, "reasoning.effort", "medium")
+		case "gpt-5-high":
+			body, _ = sjson.SetBytes(body, "reasoning.effort", "high")
+		}
+	} else if util.InArray([]string{"gpt-5-codex", "gpt-5-codex-low", "gpt-5-codex-medium", "gpt-5-codex-high"}, model) {
+		body, _ = sjson.SetBytes(body, "model", "gpt-5-codex")
+		switch model {
+		case "gpt-5-codex-low":
+			body, _ = sjson.SetBytes(body, "reasoning.effort", "low")
+		case "gpt-5-codex-medium":
+			body, _ = sjson.SetBytes(body, "reasoning.effort", "medium")
+		case "gpt-5-codex-high":
+			body, _ = sjson.SetBytes(body, "reasoning.effort", "high")
+		}
+	}
+	if stream {
+		body, _ = sjson.DeleteBytes(body, "previous_response_id")
+	} else {
+		body, _ = sjson.SetBytes(body, "stream", true)
+		body, _ = sjson.DeleteBytes(body, "previous_response_id")
+	}
+	return body
 }

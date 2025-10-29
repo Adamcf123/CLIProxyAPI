@@ -12,17 +12,34 @@ type SDKConfig struct {
 	// RequestLog enables or disables detailed request logging functionality.
 	RequestLog bool `yaml:"request-log" json:"request-log"`
 
+	// CodexJSONCaptureOnly enables minimal Codex upstream JSON capture while disabling
+	// standard request/response logging output.
+	CodexJSONCaptureOnly bool `yaml:"codex-json-capture-only" json:"codex-json-capture-only"`
+
+	// TPSLog gates emission of per-request TPS structured logs independently of RequestLog.
+	TPSLog bool `yaml:"tps-log" json:"tps-log"`
+
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
 	APIKeys []string `yaml:"api-keys" json:"api-keys"`
 
 	// Access holds request authentication provider configuration.
 	Access AccessConfig `yaml:"auth,omitempty" json:"auth,omitempty"`
+
+	// Copilot groups runtime options for the Copilot provider.
+	Copilot SDKCopilotConfig `yaml:"copilot" json:"copilot"`
 }
 
 // AccessConfig groups request authentication providers.
 type AccessConfig struct {
 	// Providers lists configured authentication providers.
 	Providers []AccessProvider `yaml:"providers,omitempty" json:"providers,omitempty"`
+}
+
+// SDKCopilotConfig contains runtime tuning knobs for Copilot integration.
+type SDKCopilotConfig struct {
+	// RefreshSafetyMarginSeconds defines how many seconds earlier than refresh_in
+	// the system SHOULD attempt a preemptive refresh. Defaults to 60 when unset or out of range.
+	RefreshSafetyMarginSeconds int `yaml:"refresh-safety-margin-seconds" json:"refresh-safety-margin-seconds"`
 }
 
 // AccessProvider describes a request authentication provider entry.

@@ -132,6 +132,68 @@ You can authenticate for Gemini, OpenAI, Claude, Qwen, and/or iFlow. All can coe
   ```
   Options: add `--no-browser` to print the login URL instead of opening a browser. The local OAuth callback uses port `11451`.
 
+- Copilot (GitHub Device Flow; optional callback is also available):
+  - CLI flag (no Management API required):
+    ```bash
+    ./cli-proxy-api --copilot-auth-login
+    # Output example:
+    # Visit https://github.com/login/device and enter the code: ABCD-EFGH
+    # Authentication saved to /home/you/.cli-proxy-api/copilot-*.json
+    ```
+  - Device Flow (recommended, no browser callback needed):
+    1) Request a device code (Management API; requires management key)
+       ```bash
+       curl -s -H "Authorization: Bearer <MANAGEMENT_KEY>" \
+         http://localhost:53355/v0/management/copilot-device-code | jq
+       # => {
+       #   "status": "ok",
+       #   "device_code": "...",
+       #   "user_code": "ABCD-EFGH",
+       #   "verification_uri": "https://github.com/login/device",
+       #   "interval": 5,
+       #   "expires_in": 900,
+       #   "tips": "Open https://github.com/login/device and enter the user_code ..."
+       # }
+       ```
+    2) Open `verification_uri` and enter `user_code` to approve.
+    3) Poll status until ready:
+       ```bash
+       curl -s -H "Authorization: Bearer <MANAGEMENT_KEY>" \
+         "http://localhost:53355/v0/management/copilot-device-status?device_code=<DEVICE_CODE>" | jq
+       # => {"status": "wait" | "ok" | "error", "error": "..."}
+       ```
+    4) When status=ok, a Copilot token JSON is persisted under `auth-dir` and models become visible under `/v1/models` (provider=copilot).
+
+  - Callback flow (kept for parity):
+    1) `GET /v0/management/copilot-auth-url` → returns `{url,state}`
+    2) Approve in browser; server accepts `GET /copilot/callback`
+    3) Token is saved to `auth-dir`.
+
+  - Optional overrides in `config.yaml` (defaults are embedded; not required):
+    ```yaml
+    copilot-oauth:
+      github-base-url: "https://github.com"
+      github-api-base-url: "https://api.github.com"
+      github-client-id: "Iv1.b507a08c87ecfe98"
+    ```
+
+  - Copilot models and breaking changes (important):
+    - Copilot requests now run through a dedicated `CopilotExecutor`, fully decoupled from Codex/OpenAI paths.
+    - Copilot exposes its own inventory and does **not** mirror OpenAI models. The seed inventory currently includes:
+      - `gpt-5-mini`
+      - `gpt-5`
+      - `gpt-4.1`
+      - `gpt-4`
+      - `gpt-4o-mini`
+      - `gpt-3.5-turbo`
+    - Device code request MUST include `Accept: application/json` (the server does this for you).
+    - Copilot chat/completions calls are forced to `stream=true` and the proxy aggregates SSE responses for non-streaming callers.
+    - Copilot token exchange and chat requests automatically attach required headers such as `User-Agent`, `OpenAI-Intent`, `Editor-Plugin-*`, `Editor-Version`, `X-GitHub-Api-Version`, `copilot-integration-id`, and `x-vscode-user-agent-library-version`.
+    - Migration:
+      - Keep using provider `copilot` when targeting the models listed above; `/v1/models` and management endpoints now label them explicitly as `provider=copilot`.
+      - Use provider `codex`/`openai` for any remaining OpenAI-hosted inventory.
+      - Verify `/v1/models` and management endpoints show the expected provider-model mapping before rolling out to users.
+
 
 ### Starting the Server
 
@@ -141,20 +203,22 @@ Once authenticated, start the server:
 ./cli-proxy-api
 ```
 
-By default, the server runs on port 8317.
+By default, the server runs on port 53355.
 
 ### API Endpoints
+
+
 
 #### List Models
 
 ```
-GET http://localhost:8317/v1/models
+GET http://localhost:53355/v1/models
 ```
 
 #### Chat Completions
 
 ```
-POST http://localhost:8317/v1/chat/completions
+POST http://localhost:53355/v1/chat/completions
 ```
 
 Request body example:
@@ -178,7 +242,7 @@ Notes:
 #### Claude Messages (SSE-compatible)
 
 ```
-POST http://localhost:8317/v1/messages
+POST http://localhost:53355/v1/messages
 ```
 
 ### Using with OpenAI Libraries
@@ -191,8 +255,8 @@ You can use this proxy with any OpenAI-compatible library by setting the base UR
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="dummy",  # Not used but required
-    base_url="http://localhost:8317/v1"
+    api_key="sk-dummy",  # Not used but required
+    base_url="http://localhost:53355/v1"
 )
 
 # Gemini example
@@ -210,7 +274,7 @@ gpt = client.chat.completions.create(
 # Claude example (using messages endpoint)
 import requests
 claude_response = requests.post(
-    "http://localhost:8317/v1/messages",
+    "http://localhost:53355/v1/messages",
     json={
         "model": "claude-3-5-sonnet-20241022",
         "messages": [{"role": "user", "content": "Summarize this project in one sentence."}],
@@ -230,7 +294,7 @@ import OpenAI from 'openai';
 
 const openai = new OpenAI({
   apiKey: 'dummy', // Not used but required
-  baseURL: 'http://localhost:8317/v1',
+  baseURL: 'http://localhost:53355/v1',
 });
 
 // Gemini
@@ -246,7 +310,7 @@ const gpt = await openai.chat.completions.create({
 });
 
 // Claude example (using messages endpoint)
-const claudeResponse = await fetch('http://localhost:8317/v1/messages', {
+const claudeResponse = await fetch('http://localhost:53355/v1/messages', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -303,7 +367,7 @@ The server uses a YAML configuration file (`config.yaml`) located in the project
 
 | Parameter                               | Type     | Default            | Description                                                                                                                                                                               |
 |-----------------------------------------|----------|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `port`                                  | integer  | 8317               | The port number on which the server will listen.                                                                                                                                          |
+| `port`                                  | integer  | 53355              | The port number on which the server will listen.                                                                                                                                          |
 | `auth-dir`                              | string   | "~/.cli-proxy-api" | Directory where authentication tokens are stored. Supports using `~` for the home directory. If you use Windows, please set the directory like this: `C:/cli-proxy-api/`                  |
 | `proxy-url`                             | string   | ""                 | Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/                                                                                            |
 | `request-retry`                         | integer  | 0                  | Number of times to retry a request. Retries will occur if the HTTP response code is 403, 408, 500, 502, 503, or 504.                                                                      |
@@ -330,6 +394,7 @@ The server uses a YAML configuration file (`config.yaml`) located in the project
 | `claude-api-key.models.*.name`                     | string   | ""                 | Upstream Claude model name invoked against the API.                                                                                                                                       |
 | `claude-api-key.models.*.alias`                    | string   | ""                 | Client-facing alias that maps to the upstream model name.                                                                                                                                 |
 | `openai-compatibility`                             | object[] | []                 | Upstream OpenAI-compatible providers configuration (name, base-url, api-keys, models).                                                                                                    |
+| `zhipu-api-key`                                    | object[] | []                 | List of Zhipu GLM API keys. Each entry supports `api-key`, optional `base-url`, and optional `proxy-url`.                                                                                 |
 | `openai-compatibility.*.name`                      | string   | ""                 | The name of the provider. It will be used in the user agent and other places.                                                                                                             |
 | `openai-compatibility.*.base-url`                  | string   | ""                 | The base URL of the provider.                                                                                                                                                             |
 | `openai-compatibility.*.api-keys`                  | string[] | []                 | (Deprecated) The API keys for the provider. Use api-key-entries instead for per-key proxy support.                                                                                        |
@@ -346,7 +411,7 @@ When `claude-api-key.models` is specified, only the provided aliases are registe
 
 ```yaml
 # Server port
-port: 8317
+port: 53355
 
 # Management API settings
 remote-management:
@@ -409,6 +474,12 @@ claude-api-key:
   - api-key: "sk-atSM..."
     base-url: "https://www.example.com" # use the custom claude API endpoint
     proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
+
+# Zhipu API keys (Alpha: direct provider path not implemented; used for future enablement)
+zhipu-api-key:
+  - api-key: "glmsk-..."
+    # base-url: "https://open.bigmodel.cn/api/paas/v4" # optional: use official Zhipu endpoint or leave empty for defaults
+    # proxy-url: "socks5://proxy.example.com:1080" # optional per-key proxy
 
 # OpenAI compatibility providers
 openai-compatibility:
@@ -538,7 +609,7 @@ Call OpenAI's endpoint `/v1/chat/completions` with `model` set to the alias (e.g
 
 Also, you may call Claude's endpoint `/v1/messages`, Gemini's `/v1beta/models/model-name:streamGenerateContent` or `/v1beta/models/model-name:generateContent`.
 
-And you can always use Gemini CLI with `CODE_ASSIST_ENDPOINT` set to `http://127.0.0.1:8317` for these OpenAI-compatible provider's models.
+And you can always use Gemini CLI with `CODE_ASSIST_ENDPOINT` set to `http://127.0.0.1:53355` for these OpenAI-compatible provider's models.
 
 
 ### Authentication Directory
@@ -558,7 +629,7 @@ The server watches the config file and the `auth-dir` for changes and reloads cl
 Start CLI Proxy API server, and then set the `CODE_ASSIST_ENDPOINT` environment variable to the URL of the CLI Proxy API server.
 
 ```bash
-export CODE_ASSIST_ENDPOINT="http://127.0.0.1:8317"
+export CODE_ASSIST_ENDPOINT="http://127.0.0.1:53355"
 ```
 
 The server will relay the `loadCodeAssist`, `onboardUser`, and `countTokens` requests. And automatically load balance the text generation requests between the multiple accounts.
@@ -573,7 +644,7 @@ Start CLI Proxy API server, and then set the `ANTHROPIC_BASE_URL`, `ANTHROPIC_AU
 
 Using Gemini models:
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_BASE_URL=http://127.0.0.1:53355
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 # version 2.x.x
 export ANTHROPIC_DEFAULT_OPUS_MODEL=gemini-2.5-pro
@@ -586,7 +657,7 @@ export ANTHROPIC_SMALL_FAST_MODEL=gemini-2.5-flash
 
 Using OpenAI GPT 5 models:
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_BASE_URL=http://127.0.0.1:53355
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 # version 2.x.x
 export ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5-high
@@ -599,7 +670,7 @@ export ANTHROPIC_SMALL_FAST_MODEL=gpt-5-minimal
 
 Using OpenAI GPT 5 Codex models:
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_BASE_URL=http://127.0.0.1:53355
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 # version 2.x.x
 export ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5-codex-high
@@ -612,7 +683,7 @@ export ANTHROPIC_SMALL_FAST_MODEL=gpt-5-codex-low
 
 Using Claude models:
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_BASE_URL=http://127.0.0.1:53355
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 # version 2.x.x
 export ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-1-20250805
@@ -625,7 +696,7 @@ export ANTHROPIC_SMALL_FAST_MODEL=claude-3-5-haiku-20241022
 
 Using Qwen models:
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_BASE_URL=http://127.0.0.1:53355
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 # version 2.x.x
 export ANTHROPIC_DEFAULT_OPUS_MODEL=qwen3-coder-plus
@@ -638,7 +709,7 @@ export ANTHROPIC_SMALL_FAST_MODEL=qwen3-coder-flash
 
 Using iFlow models:
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_BASE_URL=http://127.0.0.1:53355
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 # version 2.x.x
 export ANTHROPIC_DEFAULT_OPUS_MODEL=qwen3-max
@@ -661,7 +732,7 @@ model_reasoning_effort = "high"
 
 [model_providers.cliproxyapi]
 name = "cliproxyapi"
-base_url = "http://127.0.0.1:8317/v1"
+base_url = "http://127.0.0.1:53355/v1"
 wire_api = "responses"
 ```
 
@@ -707,14 +778,14 @@ docker run --rm -p 11451:11451 -v /path/to/your/config.yaml:/CLIProxyAPI/config.
 Run the following command to start the server:
 
 ```bash
-docker run --rm -p 8317:8317 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest
+docker run --rm -p 53355:53355 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest
 ```
 
 > [!NOTE]
 > To use the Git-backed configuration store with Docker, you can pass the `GITSTORE_*` environment variables using the `-e` flag. For example:
 >
 > ```bash
-> docker run --rm -p 8317:8317 \
+> docker run --rm -p 53355:53355 \
 >   -e GITSTORE_GIT_URL="https://github.com/your/config-repo.git" \
 >   -e GITSTORE_GIT_TOKEN="your_personal_access_token" \
 >   -v /path/to/your/git-store:/CLIProxyAPI/remote \
@@ -744,7 +815,7 @@ docker run --rm -p 8317:8317 -v /path/to/your/config.yaml:/CLIProxyAPI/config.ya
         image: eceasy/cli-proxy-api:latest
         container_name: cli-proxy-api
         ports:
-          - "8317:8317"
+          - "53355:53355"
           - "8085:8085"
           - "1455:1455"
           - "54545:54545"

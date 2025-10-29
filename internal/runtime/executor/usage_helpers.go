@@ -37,6 +37,15 @@ func newUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 	if auth != nil {
 		reporter.authID = auth.ID
 	}
+	// propagate provider/model to Gin context for downstream TPS sampling
+	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
+		if provider != "" {
+			ginCtx.Set("API_PROVIDER", provider)
+		}
+		if model != "" {
+			ginCtx.Set("API_MODEL_ID", model)
+		}
+	}
 	return reporter
 }
 
@@ -70,6 +79,33 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 	if detail.InputTokens == 0 && detail.OutputTokens == 0 && detail.ReasoningTokens == 0 && detail.CachedTokens == 0 && detail.TotalTokens == 0 && !failed {
 		return
 	}
+
+	// Update per-attempt counters for TPS calculation (max seen to avoid double count)
+	if ginCtx := ginContextFrom(ctx); ginCtx != nil {
+		if attempts, attempt := ensureAttempt(ginCtx); attempt != nil {
+			// Ensure requestedAt is set even when request-log is disabled,
+			// so request window exists for TPS fallback on non-stream paths.
+			if attempt.requestedAt.IsZero() && !r.requestedAt.IsZero() {
+				attempt.requestedAt = r.requestedAt
+			}
+			if detail.InputTokens > attempt.inputTokens {
+				attempt.inputTokens = detail.InputTokens
+			}
+			if detail.OutputTokens > attempt.outputTokens {
+				attempt.outputTokens = detail.OutputTokens
+			}
+			// propagate to context to keep latest snapshot
+			updateAggregatedResponse(ginCtx, attempts)
+			// also ensure provider/model attribution is visible to finalizer
+			if r.provider != "" {
+				ginCtx.Set("API_PROVIDER", r.provider)
+			}
+			if r.model != "" {
+				ginCtx.Set("API_MODEL_ID", r.model)
+			}
+		}
+	}
+
 	r.once.Do(func() {
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,

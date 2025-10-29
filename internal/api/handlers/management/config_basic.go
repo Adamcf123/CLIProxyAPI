@@ -147,6 +147,20 @@ func (h *Handler) PutRequestLog(c *gin.Context) {
 	h.updateBoolField(c, func(v bool) { h.cfg.RequestLog = v })
 }
 
+// Codex JSON Capture Only
+func (h *Handler) GetCodexJSONCaptureOnly(c *gin.Context) {
+	c.JSON(200, gin.H{"codex-json-capture-only": h.cfg.CodexJSONCaptureOnly})
+}
+func (h *Handler) PutCodexJSONCaptureOnly(c *gin.Context) {
+	h.updateBoolField(c, func(v bool) { h.cfg.CodexJSONCaptureOnly = v })
+}
+
+// TPS log
+func (h *Handler) GetTPSLog(c *gin.Context) { c.JSON(200, gin.H{"tps-log": h.cfg.TPSLog}) }
+func (h *Handler) PutTPSLog(c *gin.Context) {
+	h.updateBoolField(c, func(v bool) { h.cfg.TPSLog = v })
+}
+
 // Request retry
 func (h *Handler) GetRequestRetry(c *gin.Context) {
 	c.JSON(200, gin.H{"request-retry": h.cfg.RequestRetry})

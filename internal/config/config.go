@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"syscall"
@@ -37,6 +38,8 @@ type Config struct {
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
+	// CodexJSONCaptureOnly is provided via embedded SDKConfig. Do not redeclare here.
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 
@@ -60,7 +63,51 @@ type Config struct {
 
 	// RemoteManagement nests management-related options under 'remote-management'.
 	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
+
+	// Packycode holds configuration for Packycode upstream provider integration.
+	Packycode PackycodeConfig `yaml:"packycode" json:"packycode"`
+
+	// NOTE: Python Bridge removed; legacy keys are ignored by YAML loader.
+
+	// ZhipuKey defines a list of Zhipu API key configurations.
+	ZhipuKey []ZhipuKey `yaml:"zhipu-api-key" json:"zhipu-api-key"`
+
+	// Copilot contains OAuth settings for the Copilot provider.
+	Copilot CopilotOAuth `yaml:"copilot-oauth" json:"copilot-oauth"`
 }
+
+// PackycodeConfig represents configuration for routing Claude Code compatible
+// traffic to the Packycode upstream.
+type PackycodeConfig struct {
+	Enabled            bool                 `yaml:"enabled" json:"enabled"`
+	BaseURL            string               `yaml:"base-url" json:"base-url"`
+	RequiresOpenAIAuth bool                 `yaml:"requires-openai-auth" json:"requires-openai-auth"`
+	WireAPI            string               `yaml:"wire-api" json:"wire-api"`
+	Privacy            PackycodePrivacy     `yaml:"privacy" json:"privacy"`
+	Defaults           PackycodeDefaults    `yaml:"defaults" json:"defaults"`
+	Credentials        PackycodeCredentials `yaml:"credentials" json:"credentials"`
+	// EffectiveSource is a read-only indicator of where the effective
+	// configuration was loaded from (e.g., config.yaml | env | codex-cli)
+	EffectiveSource string `yaml:"effective-source,omitempty" json:"effective-source,omitempty"`
+}
+
+// PackycodePrivacy groups privacy related options.
+type PackycodePrivacy struct {
+	DisableResponseStorage bool `yaml:"disable-response-storage" json:"disable-response-storage"`
+}
+
+// PackycodeDefaults groups default request options.
+type PackycodeDefaults struct {
+	Model                string `yaml:"model" json:"model"`
+	ModelReasoningEffort string `yaml:"model-reasoning-effort" json:"model-reasoning-effort"`
+}
+
+// PackycodeCredentials groups upstream credentials.
+type PackycodeCredentials struct {
+	OpenAIAPIKey string `yaml:"openai-api-key" json:"openai-api-key"`
+}
+
+// PythonAgentConfig removed.
 
 // RemoteManagement holds management API configuration under 'remote-management'.
 type RemoteManagement struct {
@@ -120,6 +167,37 @@ type CodexKey struct {
 
 	// ProxyURL overrides the global proxy setting for this API key if provided.
 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
+}
+
+// ZhipuKey represents the configuration for a Zhipu API key.
+type ZhipuKey struct {
+	// APIKey is the authentication key for accessing Zhipu GLM API services.
+	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// BaseURL is the base URL for the Zhipu API endpoint.
+	// If empty, the default Zhipu API URL will be used.
+	BaseURL string `yaml:"base-url" json:"base-url"`
+
+	// ProxyURL overrides the global proxy setting for this API key if provided.
+	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
+}
+
+// CopilotOAuth defines OAuth endpoints and parameters for Copilot provider.
+type CopilotOAuth struct {
+	// AuthURL is the authorization endpoint (e.g., https://.../oauth/authorize)
+	AuthURL string `yaml:"auth-url" json:"auth-url"`
+	// TokenURL is the token exchange endpoint (e.g., https://.../oauth/token)
+	TokenURL string `yaml:"token-url" json:"token-url"`
+	// ClientID identifies the OAuth client application.
+	ClientID string `yaml:"client-id" json:"client-id"`
+	// RedirectPort is the localhost port for the temporary callback forwarder.
+	RedirectPort int `yaml:"redirect-port" json:"redirect-port"`
+	// Scope is the OAuth scope string.
+	Scope string `yaml:"scope" json:"scope"`
+	// Optional overrides for GitHub Device Flow endpoints and client id
+	GitHubBaseURL    string `yaml:"github-base-url" json:"github-base-url"`
+	GitHubAPIBaseURL string `yaml:"github-api-base-url" json:"github-api-base-url"`
+	GitHubClientID   string `yaml:"github-client-id" json:"github-client-id"`
 }
 
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
@@ -202,6 +280,14 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.LoggingToFile = false
 	cfg.UsageStatisticsEnabled = false
 	cfg.DisableCooling = false
+	// Packycode defaults
+	cfg.Packycode.Enabled = false
+	cfg.Packycode.RequiresOpenAIAuth = true
+	cfg.Packycode.WireAPI = "responses"
+	cfg.Packycode.Privacy.DisableResponseStorage = true
+	cfg.Packycode.Defaults.Model = "gpt-5"
+	cfg.Packycode.Defaults.ModelReasoningEffort = "high"
+	// Python Bridge removed; no defaults
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		if optional {
 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
@@ -233,8 +319,123 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Sanitize Codex keys: drop entries without base-url
 	sanitizeCodexKeys(&cfg)
 
+	// Normalize and sanitize Packycode configuration
+	sanitizePackycode(&cfg)
+	// Normalize Copilot OAuth defaults
+	sanitizeCopilotOAuth(&cfg)
+	// Python Bridge removed; ignore legacy keys if present
+	if !optional {
+		if err := ValidatePackycode(&cfg); err != nil {
+			return nil, fmt.Errorf("invalid packycode configuration: %w", err)
+		}
+	}
+
+	// Mark effective source for Packycode if any relevant fields are present
+	if (cfg.Packycode.Enabled || strings.TrimSpace(cfg.Packycode.BaseURL) != "" || cfg.Packycode.RequiresOpenAIAuth || cfg.Packycode.Credentials.OpenAIAPIKey != "") && cfg.Packycode.EffectiveSource == "" {
+		cfg.Packycode.EffectiveSource = "config.yaml"
+	}
+
 	// Return the populated configuration struct.
 	return &cfg, nil
+}
+
+// sanitizePackycode normalizes and validates Packycode configuration to a safe baseline.
+// Early phase behaviour: coerce to expected defaults rather than returning hard errors.
+func sanitizePackycode(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	pc := &cfg.Packycode
+	pc.BaseURL = strings.TrimSpace(pc.BaseURL)
+	if pc.WireAPI == "" || !strings.EqualFold(pc.WireAPI, "responses") {
+		pc.WireAPI = "responses"
+	}
+	// Enforce privacy default (do not persist responses by default)
+	if !pc.Privacy.DisableResponseStorage {
+		pc.Privacy.DisableResponseStorage = true
+	}
+	// Clamp effort to allowed set if provided; otherwise keep default
+	switch strings.ToLower(strings.TrimSpace(pc.Defaults.ModelReasoningEffort)) {
+	case "", "high", "medium", "low":
+		if pc.Defaults.ModelReasoningEffort == "" {
+			pc.Defaults.ModelReasoningEffort = "high"
+		}
+	default:
+		pc.Defaults.ModelReasoningEffort = "high"
+	}
+}
+
+// sanitizeCopilotOAuth applies safe defaults and trims Copilot OAuth settings.
+func sanitizeCopilotOAuth(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	c := &cfg.Copilot
+	c.AuthURL = strings.TrimSpace(c.AuthURL)
+	c.TokenURL = strings.TrimSpace(c.TokenURL)
+	c.ClientID = strings.TrimSpace(c.ClientID)
+	c.Scope = strings.TrimSpace(c.Scope)
+	c.GitHubBaseURL = strings.TrimSpace(c.GitHubBaseURL)
+	c.GitHubAPIBaseURL = strings.TrimSpace(c.GitHubAPIBaseURL)
+	c.GitHubClientID = strings.TrimSpace(c.GitHubClientID)
+	if c.RedirectPort == 0 {
+		c.RedirectPort = 54556
+	}
+	if c.Scope == "" {
+		c.Scope = "openid email profile offline_access"
+	}
+}
+
+// ValidatePackycode performs strict validation for the Packycode configuration.
+// It ensures required fields are present and values are constrained to allowed sets.
+// Returns nil when configuration is valid or Packycode is disabled.
+func ValidatePackycode(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	pc := cfg.Packycode
+	if !pc.Enabled {
+		return nil
+	}
+
+	var problems []string
+	// base-url: required and must be http/https URL
+	base := strings.TrimSpace(pc.BaseURL)
+	if base == "" {
+		problems = append(problems, "base-url is required when packycode.enabled=true")
+	} else {
+		if u, err := url.Parse(base); err != nil || u.Scheme == "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			problems = append(problems, "base-url must be a valid http(s) URL")
+		}
+	}
+
+	// wire-api must be "responses"
+	if strings.TrimSpace(strings.ToLower(pc.WireAPI)) != "responses" {
+		problems = append(problems, "wire-api must be \"responses\"")
+	}
+
+	// requires-openai-auth implies credentials.openai-api-key required
+	if pc.RequiresOpenAIAuth {
+		if strings.TrimSpace(pc.Credentials.OpenAIAPIKey) == "" {
+			problems = append(problems, "credentials.openai-api-key is required when requires-openai-auth=true")
+		}
+	}
+
+	// defaults.model-reasoning-effort enumeration
+	switch strings.ToLower(strings.TrimSpace(pc.Defaults.ModelReasoningEffort)) {
+	case "low", "medium", "high":
+		// ok
+	default:
+		// Allow empty (defaulted by sanitizer) but if provided invalid, report
+		if strings.TrimSpace(pc.Defaults.ModelReasoningEffort) != "" {
+			problems = append(problems, "defaults.model-reasoning-effort must be one of: low, medium, high")
+		}
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid packycode configuration: %s", strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 // sanitizeOpenAICompatibility removes OpenAI-compatibility provider entries that are
@@ -369,6 +570,8 @@ func sanitizeConfigForPersist(cfg *Config) *Config {
 	clone := *cfg
 	clone.SDKConfig = cfg.SDKConfig
 	clone.SDKConfig.Access = config.AccessConfig{}
+	// Do not persist read-only/effective fields
+	clone.Packycode.EffectiveSource = ""
 	return &clone
 }
 
