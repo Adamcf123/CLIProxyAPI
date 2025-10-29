@@ -356,6 +356,22 @@ func (s *Service) ensureExecutorsForAuth(a *coreauth.Auth) {
 		}
 		return
 	case "claude":
+		// Detect Anthropic-compatible endpoints that are actually served by other providers
+		// (Zhipu / MiniMax). When such base_url is present, register the corresponding
+		// provider executor so requests routed to provider=zhipu or provider=minimax
+		// will find a registered executor instead of triggering executor_not_found.
+		if a.Attributes != nil {
+			if v := strings.TrimSpace(a.Attributes["base_url"]); v != "" {
+				if strings.EqualFold(v, "https://open.bigmodel.cn/api/anthropic") {
+					s.coreManager.RegisterExecutor(executor.NewZhipuExecutor(s.cfg))
+					return
+				}
+				if strings.EqualFold(v, "https://api.minimaxi.com/anthropic") {
+					s.coreManager.RegisterExecutor(executor.NewMiniMaxExecutor(s.cfg))
+					return
+				}
+			}
+		}
 		s.coreManager.RegisterExecutor(executor.NewClaudeExecutor(s.cfg))
 	case "codex":
 		s.coreManager.RegisterExecutor(executor.NewCodexExecutorWithID(s.cfg, "codex"))
@@ -876,6 +892,10 @@ func (s *Service) ensureCopilotModelsRegistered(cfg *config.Config) {
 	if len(models) == 0 {
 		registry.GetGlobalRegistry().UnregisterClient(id)
 		return
+	}
+	// Ensure copilot executor exists early to avoid executor_not_found
+	if s.coreManager != nil {
+		s.coreManager.RegisterExecutor(executor.NewCopilotExecutor(s.cfg))
 	}
 	// Register under provider key 'copilot'
 	registry.GetGlobalRegistry().RegisterClient(id, "copilot", models)

@@ -20,6 +20,11 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// hasZSTDEcoding checks if the Content-Encoding header indicates zstd compression
+func hasZSTDEcoding(contentEncoding string) bool {
+	return strings.Contains(strings.ToLower(contentEncoding), "zstd")
+}
+
 // AnthropicCompatExecutor centralizes Anthropic Messages flow for all
 // Anthropic-compatible upstreams (official Claude, Zhipu, MiniMax).
 // Specific providers should wrap this executor with a distinct identifier.

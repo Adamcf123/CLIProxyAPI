@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -10,6 +12,83 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	logtest "github.com/sirupsen/logrus/hooks/test"
 )
+
+func TestRecordAPIRequest_CodexCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(w)
+
+	cfg := &config.Config{}
+	cfg.CodexJSONCaptureOnly = true
+
+	ctx := context.WithValue(context.Background(), "gin", ginCtx)
+
+	body := []byte(`{
+		"model":"gpt-5-codex",
+		"instructions":"run bash",
+		"input":[{"type":"function_call","name":"bash","arguments":{"command":"ls"}}],
+		"tools":[{"type":"function","name":"bash","description":"runs bash","parameters":{"type":"object"}}]
+	}`)
+
+	recordAPIRequest(ctx, cfg, upstreamRequestLog{
+		URL:      "https://codex.example/responses",
+		Method:   http.MethodPost,
+		Headers:  http.Header{},
+		Body:     body,
+		Provider: "codex",
+	})
+
+	capture, ok := ginCtx.Get("API_JSON_CAPTURE")
+	if !ok {
+		t.Fatalf("expected API_JSON_CAPTURE to be set")
+	}
+	captureBytes, ok := capture.([]byte)
+	if !ok {
+		t.Fatalf("expected capture to be []byte, got %T", capture)
+	}
+	if len(captureBytes) == 0 {
+		t.Fatalf("expected non-empty capture data")
+	}
+
+	if !strings.Contains(string(captureBytes), "\"bash\"") {
+		t.Fatalf("expected capture to retain original name 'bash', got %s", string(captureBytes))
+	}
+
+	if provider, ok := ginCtx.Get("API_JSON_CAPTURE_PROVIDER"); !ok || provider != "codex" {
+		t.Fatalf("expected provider=codex, got %v", provider)
+	}
+}
+
+func TestRecordAPIRequest_CaptureOnlySkipNonCodex(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+
+	w := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(w)
+
+	cfg := &config.Config{}
+	cfg.CodexJSONCaptureOnly = true
+
+	ctx := context.WithValue(context.Background(), "gin", ginCtx)
+
+	body := []byte(`{"model":"gpt-4o","input":[]}`)
+
+	recordAPIRequest(ctx, cfg, upstreamRequestLog{
+		URL:      "https://openai.example/v1",
+		Method:   http.MethodPost,
+		Headers:  http.Header{},
+		Body:     body,
+		Provider: "openai",
+	})
+
+	if _, exists := ginCtx.Get("API_JSON_CAPTURE"); exists {
+		t.Fatalf("expected capture to be omitted for non-codex provider")
+	}
+
+}
 
 // Test that per-request-tps structured log includes provider/model fields when present
 func TestPerRequestTPSLog_IncludesProviderModel(t *testing.T) {

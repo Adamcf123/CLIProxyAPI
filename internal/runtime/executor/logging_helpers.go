@@ -85,9 +85,10 @@ func recordAPIRequest(ctx context.Context, cfg *config.Config, info upstreamRequ
 	// for downstream consumers (e.g., response writer logger, debugging tools).
 	model := strings.TrimSpace(gjson.GetBytes(info.Body, "model").String())
 	isCodexProvider := strings.EqualFold(info.Provider, "codex") || strings.EqualFold(info.Provider, "packycode")
-	isCodexVariant := util.InArray([]string{"gpt-5-codex-low", "gpt-5-codex-medium", "gpt-5-codex-high"}, model)
+	isCodexVariant := util.InArray([]string{"gpt-5-codex", "gpt-5-codex-low", "gpt-5-codex-medium", "gpt-5-codex-high"}, model)
 
 	if isCodexProvider && isCodexVariant {
+		log.Debugf("codex capture: evaluating provider=%s model=%s captureOnly=%t", strings.ToLower(info.Provider), model, isCaptureOnly)
 		inputs := gjson.GetBytes(info.Body, "input").Array()
 		var items []string
 		for i := range inputs {
@@ -95,13 +96,17 @@ func recordAPIRequest(ctx context.Context, cfg *config.Config, info upstreamRequ
 			if !strings.EqualFold(it.Get("type").String(), "function_call") {
 				continue
 			}
-			name := strings.ToLower(strings.TrimSpace(it.Get("name").String()))
-			if !(strings.Contains(name, "bash") || strings.Contains(name, "shell")) {
+			originalName := strings.TrimSpace(it.Get("name").String())
+			if originalName == "" {
+				continue
+			}
+			nameLower := strings.ToLower(originalName)
+			if !(strings.Contains(nameLower, "bash") || strings.Contains(nameLower, "shell")) {
 				continue
 			}
 			var b strings.Builder
 			b.WriteString("{\"type\":\"function_call\",\"name\":")
-			b.WriteString(fmt.Sprintf("%q", it.Get("name").String()))
+			b.WriteString(fmt.Sprintf("%q", originalName))
 			if v := it.Get("call_id"); v.Exists() {
 				b.WriteString(",\"call_id\":")
 				b.WriteString(v.Raw)
@@ -119,13 +124,17 @@ func recordAPIRequest(ctx context.Context, cfg *config.Config, info upstreamRequ
 		var bashTools []string
 		for i := range tools {
 			t := tools[i]
-			name := strings.ToLower(strings.TrimSpace(t.Get("name").String()))
-			if !(strings.Contains(name, "bash") || strings.Contains(name, "shell")) {
+			originalName := strings.TrimSpace(t.Get("name").String())
+			if originalName == "" {
+				continue
+			}
+			nameLower := strings.ToLower(originalName)
+			if !(strings.Contains(nameLower, "bash") || strings.Contains(nameLower, "shell")) {
 				continue
 			}
 			var sb strings.Builder
 			sb.WriteString("{\"type\":\"function\",\"name\":")
-			sb.WriteString(fmt.Sprintf("%q", t.Get("name").String()))
+			sb.WriteString(fmt.Sprintf("%q", originalName))
 			if v := t.Get("description"); v.Exists() {
 				sb.WriteString(",\"description\":")
 				sb.WriteString(v.Raw)
@@ -171,6 +180,7 @@ func recordAPIRequest(ctx context.Context, cfg *config.Config, info upstreamRequ
 			return
 		}
 	} else if isCaptureOnly {
+		log.Debugf("codex capture: skipping non-codex provider=%s model=%s in capture-only mode", strings.ToLower(info.Provider), model)
 		// Capture-only mode with non-Codex request: skip entirely.
 		return
 	}
