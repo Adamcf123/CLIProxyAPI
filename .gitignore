@@ -40,3 +40,4 @@ vendor/
 Thumbs.db
 *.tmp
 *.swp
+.codex/
