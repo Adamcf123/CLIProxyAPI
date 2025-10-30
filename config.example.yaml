@@ -118,4 +118,22 @@ copilot:
 #  credentials:
 #    openai-api-key: "sk-OPENAI-XXXX..."
 
-# 注：已移除对外部 Python 侧组件的集成；请直接配置 zhipu 或兼容端点直连参数。
+# Third-Party Provider Codex (tppc): support multiple third-party providers for Codex API
+# Note: This replaces and extends the packycode configuration with multi-provider support
+#tppc:
+#  providers:
+#    - name: "packycode" # Provider identifier (e.g., packycode, custom-provider, etc.)
+#      enabled: true # Whether this provider is active
+#      base-url: "https://codex-api.packycode.com/v1" # API endpoint for this provider
+#      api-key: "sk-OPENAI-XXXX..." # API key for this provider
+#    - name: "custom-provider"
+#      enabled: false
+#      base-url: "https://custom.example.com/v1"
+#      api-key: "sk-CUSTOM-XXXX..."
+#
+# Built-in defaults (applied to all tppc providers):
+# - wire-api: "responses"
+# - privacy.disable-response-storage: true
+# - defaults.model: "gpt-5"
+# - defaults.model-reasoning-effort: "high"
+

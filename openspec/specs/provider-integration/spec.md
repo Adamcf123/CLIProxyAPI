@@ -8,6 +8,39 @@ TBD - created by archiving change add-zhipu-api-support. Update Purpose after ar
 
 为保持实现一致性，系统 SHALL 参考 `openspec/changes/tps-specified-model/specs/provider-integration/packycode-provider-alias.md` 作为补充说明
 
+### Requirement: TPPC Multi-Provider Support
+系统 SHALL 支持 Third-Party Provider Codex (tppc) 多提供商架构，允许配置多个独立的第三方提供商，实现更灵活的提供商管理和切换能力。
+
+#### Scenario: Multiple provider configuration
+- **WHEN** 系统配置了多个 tppc providers
+- **THEN** 系统 SHALL 独立管理每个提供商的状态和凭据
+- **AND** 系统 SHALL 支持启用/禁用个别提供商而不影响其他提供商
+
+#### Scenario: Provider model registration
+- **GIVEN** tppc 配置中包含启用状态的提供商
+- **WHEN** 系统启动并使用 `--tppc` 标志或自动注册机制
+- **THEN** 系统 SHALL 为每个启用的提供商注册相应的 OpenAI/GPT 模型
+- **AND** 系统 SHALL 使用提供商名称作为 provider 标识符，而非统一的 "codex"
+
+#### Scenario: Credential fallback mechanism
+- **GIVEN** 存在 tppc 配置且无显式认证凭据
+- **WHEN** 请求路由到 Codex 执行器
+- **THEN** 系统 SHALL 从 tppc 配置中获取第一个启用提供商的凭据
+- **AND** 系统 SHALL 按照优先级：显式 auth > tppc 配置 > 默认值 进行凭据选择
+
+#### Scenario: Management API integration
+- **WHEN** 系统提供 tppc 管理接口
+- **THEN** 系统 SHALL 支持以下端点：
+  - `GET /v0/management/tppc` - 获取当前 tppc 配置
+  - `PUT /v0/management/tppc` - 替换完整 tppc 配置
+  - `PATCH /v0/management/tppc` - 部分更新 tppc 配置
+- **AND** 系统 SHALL 验证所有启用的提供商具有必需字段（name、base-url、api-key）
+
+#### Scenario: Backward compatibility
+- **WHEN** 系统同时存在 packycode 和 tppc 配置
+- **THEN** 系统 SHALL 保持两种配置格式的兼容性
+- **AND** 系统 SHALL 确保现有 packycode 功能不受 tppc 配置影响
+
 #### Scenario: Management listing and filtering
 - **WHEN** 管理端启用
 - **THEN** 系统 SHALL 满足以下条目

@@ -77,17 +77,65 @@
 - [ ] T025 在 internal/api/handlers/management/config_lists.go 附近增加注释引用新的 packycode 管理文件，便于维护者发现
 - [ ] T026 在 .codex/prompts/speckit.* 中如有对 codex/codex-api-key 的文字，增加 Packycode 说明（不改变行为）
 
+## Phase N+1: TPPC Enhancement - Multi-Provider Support
+
+### Archive Information
+
+- **Archive Date**: 2025-10-30
+- **Change ID**: 2025-10-30-tppc-multiple-providers
+- **Archive Location**: `/openspec/changes/archive/2025-10-30-tppc-multiple-providers/`
+- **Status**: ✅ Implemented and Archived
+- **Integration**: All TPPC tasks completed and integrated into main codebase
+
+### Implementation for TPPC Enhancement
+
+- [A] T029 [TPPC] 添加 TPPC 配置结构体到 internal/config/config.go（`type TppcConfig` 与 `Config.Tppc` 字段，`type TppcProvider`）
+- [A] T030 [TPPC] 在 internal/config/config.go 的 LoadConfigOptional 中设置 TPPC 默认值与调用 `sanitizeTppc(cfg)`
+- [A] T031 [TPPC] 在 internal/config/config.go 新增 `sanitizeTppc(cfg *Config)`，校验 providers 数组中的每个 enabled provider 的 name、base-url、api-key 字段
+- [A] T032 [TPPC] 在 internal/config/config.go 新增 `ValidateTppc(cfg *Config)` 函数，验证所有 enabled providers 具有必需字段
+- [A] T033 [TPPC] 在 internal/api/handlers/management/ 新建 `tppc.go`，实现 GET/PUT/PATCH 处理器，读写 `h.cfg.Tppc` 并持久化
+- [A] T034 [TPPC] 在 internal/api/server.go 的 registerManagementRoutes 中注册 `/v0/management/tppc` 的 GET/PUT/PATCH 路由
+- [A] T035 [TPPC] 修改 internal/runtime/executor/codex_executor.go 的 `Execute` 与 `ExecuteStream` 方法，支持从 tppc 配置获取凭据作为 fallback
+- [A] T036 [TPPC] 在 internal/runtime/executor/codex_executor.go 新增 `getCodexCreds` 与 `getTppcCreds` 方法，实现凭据优先级机制
+- [A] T037 [TPPC] 在 cmd/server/main.go 新增 `registerTppcModels` 函数，为所有 enabled tppc providers 注册 OpenAI/GPT 模型
+- [A] T038 [TPPC] 在 cmd/server/main.go 添加 `--tppc` CLI 标志，用于主动注册 tppc providers 的模型
+- [A] T039 [TPPC] 在 config.example.yaml 添加 `tppc:` 配置示例与详细说明，包含多 providers 配置格式
+- [A] T040 [TPPC] 创建 TPPC_README.md 完整使用指南，包含配置示例、迁移说明、最佳实践和常见问题
+- [A] T041 [TPPC] 在 config.yaml 更新实际配置，展示 tppc 与 packycode 并存使用方式
+
+### TPPC Testing & Validation
+
+- [A] T042 [TPPC] 创建 tests/internal/config/tppc_config_test.go，包含 8 个配置测试用例覆盖各种场景
+- [A] T043 [TPPC] 创建 tests/internal/executor/tppc_end_to_end_test.go，包含 4 个端到端测试验证执行器集成
+- [A] T044 [TPPC] 运行完整测试套件验证所有 tppc 功能正常工作
+- [A] T045 [TPPC] 验证服务器编译成功，无编译错误或警告
+
+### TPPC Documentation & Examples
+
+- [A] T046 [TPPC] 在 config.example.yaml 添加内置默认值说明（wire-api、privacy、defaults 等硬编码参数）
+- [A] T047 [TPPC] 更新项目文档，包含 tppc 多提供商支持的说明和使用示例
+- [A] T048 [TPPC] 提供从 packycode 迁移到 tppc 的详细指南和字段映射说明
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
 
-- Phase 1 → Phase 2 → Phase 3 (US1) → Phase 4 (US2) → Phase 5 (US3) → Polish
+- Phase 1 → Phase 2 → Phase 3 (US1) → Phase 4 (US2) → Phase 5 (US3) → Polish → Phase N+1 (TPPC Enhancement)
 
 ### User Story Dependencies
 
 - US1 无依赖（MVP）
 - US2 依赖 US1 的配置与接口就绪（校验与错误返回覆盖 PUT/PATCH）
 - US3 依赖 US1 的启用路径（用于回退/降级验证）
+
+### TPPC Enhancement Dependencies
+
+- TPPC 阶段独立于原有 packycode 实现，可并行开发
+- T029–T032 基础配置（依赖 Phase 1 的配置模式）
+- T033–T034 管理接口（依赖 Phase 1 的管理模式）
+- T035–T036 执行器集成（依赖 Phase 3 的执行器架构）
+- T037–T038 模型注册（依赖 Phase 2 的模型注册机制）
+- T039–T048 文档与测试（可与其他阶段并行）
 
 ### Within Each User Story
 
@@ -98,6 +146,8 @@
 - [P] T005 与 T006 可并行（管理处理器与路由注册分文件修改）
 - [P] T001/T002/T003 与 T004 可并行（配置结构/校验与日志统计分别修改）
 - [P] 文档类任务（T009/T010/T016/T019/T022/T023/T024/T026）可并行
+- [P] TPPC 任务可完全并行开发（T029–T048）
+- [P] TPPC 测试与文档任务（T042–T048）可与其他 TPPC 实现任务并行
 
 ## Implementation Strategy
 
@@ -109,14 +159,70 @@
 
 - US2 增强校验与错误消息（T017–T019）
 - US3 降级策略与文档（T020–T022）
+- TPPC 增强：多提供商支持，完全向后兼容（T029–T048）
 
 ### Parallel Team Strategy
 
 - 一人负责管理接口与路由（T005/T006/T012/T013/T017）
 - 一人负责配置/合成与运行时（T001–T004/T007/T014/T015/T020/T021）
 - 一人负责文档与示例（T009/T010/T016/T019/T022/T023/T024/T026）
+- TPPC 增强可独立团队并行开发：
+  - 一人负责配置结构与管理接口（T029–T034）
+  - 一人负责执行器集成与模型注册（T035–T038）
+  - 一人负责测试验证与文档（T039–T048）
+
+### TPPC Enhancement Strategy
+
+#### MVP for TPPC (Minimal Viable Product)
+- 完成 T029–T032（基础配置）后即可使用基本 tppc 功能
+- 完成 T033–T034（管理接口）后即可通过 API 配置 tppc
+- 完成 T035–T036（执行器集成）后即可使用 tppc providers
+
+#### Full TPPC Delivery ✅ COMPLETED AND ARCHIVED
+- 完整的多提供商支持：T029–T048 全部完成并归档
+- 端到端测试验证：T042–T045 验证所有功能
+- 完整文档与迁移指南：T039–T041、T046–T048
+- **归档信息**: 变更已移动至 `/openspec/changes/archive/2025-10-30-tppc-multiple-providers/`
+
+#### Backward Compatibility
+- TPPC 完全独立于原有 packycode 实现
+- 现有 packycode 配置保持不变，继续正常工作
+- 提供从 packycode 到 tppc 的平滑迁移路径
 
 ## Notes
 
-- 所有新增/修改需遵守“隐私优先与最小化留存”：不持久化用户内容；日志仅记录必要元信息
+- 所有新增/修改需遵守"隐私优先与最小化留存"：不持久化用户内容；日志仅记录必要元信息
 - 合同变更与实现需保持一致（contracts/management-packycode.yaml）
+
+## TPPC Enhancement Notes
+
+### Key Design Decisions
+
+- **Configuration Simplification**: 从 packycode 的复杂嵌套结构简化为 tppc 的简洁数组格式
+- **Hard-coded Defaults**: wire-api、privacy、defaults 等参数通过代码内置，配置更简洁
+- **Provider Isolation**: 每个 provider 独立配置、启用/禁用，无相互依赖
+- **Backward Compatibility**: 保留原有 packycode 配置不变，tppc 作为增强功能独立工作
+
+### Testing Strategy
+
+- **Unit Tests**: 配置解析和验证逻辑的全面测试
+- **Integration Tests**: 执行器和 tppc 集成的端到端测试
+- **Manual Testing**: 实际多 providers 配置的验证
+
+### Migration Path
+
+- **Phase 1**: tppc 与 packycode 并存，用户可选择性使用
+- **Phase 2**: 鼓励迁移到 tppc 以获得更好多提供商支持
+- **Phase 3**: 未来版本可考虑废弃 packycode（需提前规划）
+
+### Performance Considerations
+
+- **Lazy Loading**: tppc providers 仅在需要时加载
+- **Efficient Fallback**: 凭据获取使用高效的优先级机制
+- **Memory Efficiency**: 配置结构优化，减少内存占用
+
+### Security Considerations
+
+- **API Key Protection**: 遵循现有安全实践，不在日志中暴露敏感信息
+- **Input Validation**: 严格的配置验证防止注入攻击
+- **Access Control**: 管理 API 权限控制与现有机制一致

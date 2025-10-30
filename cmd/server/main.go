@@ -65,6 +65,7 @@ func main() {
 	var configPath string
 	var password string
 	var registerPackycode bool
+	var registerTppc bool
 
 	// Define command-line flags for different operation modes.
 	flag.BoolVar(&login, "login", false, "Login Google Account")
@@ -79,6 +80,7 @@ func main() {
 	flag.StringVar(&configPath, "config", DefaultConfigPath, "Configure File Path")
 	flag.StringVar(&password, "password", "", "")
 	flag.BoolVar(&registerPackycode, "packycode", false, "Register Packycode OpenAI models at startup (requires valid packycode config)")
+	flag.BoolVar(&registerTppc, "tppc", false, "Register tppc providers' OpenAI models at startup (requires valid tppc config)")
 
 	flag.CommandLine.Usage = func() {
 		out := flag.CommandLine.Output()
@@ -373,6 +375,13 @@ func main() {
 		}
 	}
 
+	// Optional: proactively register tppc providers' models when requested via CLI flag.
+	if registerTppc {
+		if err := registerTppcModels(cfg); err != nil {
+			log.Fatalf("failed to register tppc models: %v", err)
+		}
+	}
+
 	// In cloud deploy mode, check if we have a valid configuration
 	var configFileExists bool
 	if isCloudDeploy {
@@ -493,5 +502,57 @@ func registerPackycodeModels(cfg *config.Config) error {
 	// 对外 provider=packycode（内部仍由 codex 执行器处理）
 	cliproxy.GlobalModelRegistry().RegisterClient(clientID, "packycode", models)
 	log.Infof("registered packycode models into registry (client=%s, provider=packycode, models=%d)", clientID, len(models))
+	return nil
+}
+
+// registerTppcModels registers OpenAI/GPT models for all enabled tppc providers.
+func registerTppcModels(cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	// Validate tppc configuration
+	if err := config.ValidateTppc(cfg); err != nil {
+		return fmt.Errorf("invalid tppc configuration: %w", err)
+	}
+
+	providers := cfg.Tppc.Providers
+	if len(providers) == 0 {
+		log.Info("no tppc providers configured")
+		return nil
+	}
+
+	var registeredCount int
+	for _, provider := range providers {
+		if !provider.Enabled {
+			continue
+		}
+
+		// Build a stable client ID for each provider
+		h := sha256.New()
+		h.Write([]byte("tppc:models"))
+		h.Write([]byte{0})
+		h.Write([]byte(provider.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(provider.BaseURL))
+		h.Write([]byte{0})
+		h.Write([]byte(provider.APIKey))
+		digest := hex.EncodeToString(h.Sum(nil))
+		if len(digest) > 12 {
+			digest = digest[:12]
+		}
+		clientID := "tppc:models:" + digest
+
+		models := registry.GetOpenAIModels()
+		// Register models under the provider name
+		cliproxy.GlobalModelRegistry().RegisterClient(clientID, provider.Name, models)
+		registeredCount++
+		log.Infof("registered tppc models for provider=%s (client=%s, models=%d)", provider.Name, clientID, len(models))
+	}
+
+	if registeredCount > 0 {
+		log.Infof("successfully registered tppc models for %d provider(s)", registeredCount)
+	} else {
+		log.Info("no enabled tppc providers found")
+	}
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
+	"github.com/sirupsen/logrus"
 )
 
 var statisticsEnabled atomic.Bool
@@ -458,8 +459,10 @@ func RecordTPSSample(completion, total float64) {
 // RecordTPSSampleTagged ingests a TPS observation and associates it with provider/model.
 // Also updates the untagged series to keep default aggregates intact.
 func RecordTPSSampleTagged(provider, model string, completion, total float64) {
+	logrus.Debugf("TPS_TAG_RECORD: Entering RecordTPSSampleTagged provider='%s' model='%s' completion=%.2f total=%.2f", provider, model, completion, total)
 	agg := defaultTPSAggregator
 	if agg == nil {
+		logrus.Errorf("TPS_TAG_RECORD: defaultTPSAggregator is nil, cannot record")
 		return
 	}
 	now := time.Now()
@@ -468,20 +471,29 @@ func RecordTPSSampleTagged(provider, model string, completion, total float64) {
 	if finite(completion) {
 		agg.completion = append(agg.completion, timedValue{ts: now, v: completion})
 		agg.completionSum += completion
+		logrus.Debugf("TPS_TAG_RECORD: Recorded completion=%.2f to untagged series", completion)
+	} else {
+		logrus.Debugf("TPS_TAG_RECORD: Skipping completion=%.2f (not finite)", completion)
 	}
 	if finite(total) {
 		agg.total = append(agg.total, timedValue{ts: now, v: total})
 		agg.totalSum += total
+		logrus.Debugf("TPS_TAG_RECORD: Recorded total=%.2f to untagged series", total)
+	} else {
+		logrus.Debugf("TPS_TAG_RECORD: Skipping total=%.2f (not finite)", total)
 	}
 	// Then, append tagged entries for filtering
 	if finite(completion) {
 		agg.completionTagged = append(agg.completionTagged, taggedValue{ts: now, v: completion, provider: provider, model: model})
+		logrus.Debugf("TPS_TAG_RECORD: Recorded completion=%.2f to tagged series (provider='%s' model='%s')", completion, provider, model)
 	}
 	if finite(total) {
 		agg.totalTagged = append(agg.totalTagged, taggedValue{ts: now, v: total, provider: provider, model: model})
+		logrus.Debugf("TPS_TAG_RECORD: Recorded total=%.2f to tagged series (provider='%s' model='%s')", total, provider, model)
 	}
 	recordAndMaybeCleanLocked(agg)
 	agg.mu.Unlock()
+	logrus.Debugf("TPS_TAG_RECORD: Completed RecordTPSSampleTagged for provider='%s' model='%s'", provider, model)
 }
 
 func recordAndMaybeCleanLocked(agg *tpsAggregator) {

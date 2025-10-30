@@ -52,8 +52,68 @@ func (e *CodexExecutor) Identifier() string { return e.identifier }
 
 func (e *CodexExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error { return nil }
 
+// Test helpers for tppc integration testing
+func (e *CodexExecutor) GetTestCredentials() (apiKey, baseURL string) {
+	return e.getCodexCreds(nil)
+}
+
+func (e *CodexExecutor) GetTestCredentialsWithAuth(auth *cliproxyauth.Auth) (apiKey, baseURL string) {
+	return e.getCodexCreds(auth)
+}
+
+// getCodexCreds retrieves API key and base URL from auth or tppc configuration
+func (e *CodexExecutor) getCodexCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
+	if a == nil {
+		return e.getTppcCreds()
+	}
+	// Prefer attributes when explicitly provided (e.g., api_key/base_url via management API)
+	if a.Attributes != nil {
+		apiKey = a.Attributes["api_key"]
+		baseURL = a.Attributes["base_url"]
+	}
+	// Fallback to persisted metadata from auth JSON
+	if a.Metadata != nil {
+		if apiKey == "" {
+			if v, ok := a.Metadata["access_token"].(string); ok {
+				apiKey = v
+			}
+		}
+		// Some flows persist base_url into metadata rather than attributes.
+		if baseURL == "" {
+			if v, ok := a.Metadata["base_url"].(string); ok {
+				baseURL = v
+			}
+		}
+	}
+	// Fallback to tppc configuration if no credentials found in auth
+	if apiKey == "" || baseURL == "" {
+		tppcKey, tppcURL := e.getTppcCreds()
+		if apiKey == "" {
+			apiKey = tppcKey
+		}
+		if baseURL == "" {
+			baseURL = tppcURL
+		}
+	}
+	return
+}
+
+// getTppcCreds retrieves credentials from tppc configuration
+func (e *CodexExecutor) getTppcCreds() (apiKey, baseURL string) {
+	if e == nil || e.cfg == nil || e.cfg.Tppc.Providers == nil {
+		return "", ""
+	}
+	// Return credentials from the first enabled provider
+	for _, provider := range e.cfg.Tppc.Providers {
+		if provider.Enabled {
+			return provider.APIKey, provider.BaseURL
+		}
+	}
+	return "", ""
+}
+
 func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
-	apiKey, baseURL := codexCreds(auth)
+	apiKey, baseURL := e.getCodexCreds(auth)
 
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"
@@ -166,7 +226,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 }
 
 func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (stream <-chan cliproxyexecutor.StreamChunk, err error) {
-	apiKey, baseURL := codexCreds(auth)
+	apiKey, baseURL := e.getCodexCreds(auth)
 
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"

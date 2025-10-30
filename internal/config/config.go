@@ -67,6 +67,9 @@ type Config struct {
 	// Packycode holds configuration for Packycode upstream provider integration.
 	Packycode PackycodeConfig `yaml:"packycode" json:"packycode"`
 
+	// Tppc holds configuration for Third-Party Provider Codex (multiple providers support).
+	Tppc TppcConfig `yaml:"tppc" json:"tppc"`
+
 	// NOTE: Python Bridge removed; legacy keys are ignored by YAML loader.
 
 	// ZhipuKey defines a list of Zhipu API key configurations.
@@ -105,6 +108,23 @@ type PackycodeDefaults struct {
 // PackycodeCredentials groups upstream credentials.
 type PackycodeCredentials struct {
 	OpenAIAPIKey string `yaml:"openai-api-key" json:"openai-api-key"`
+}
+
+// TppcConfig represents configuration for Third-Party Provider Codex (multiple providers support).
+type TppcConfig struct {
+	Providers []TppcProvider `yaml:"providers" json:"providers"`
+}
+
+// TppcProvider represents a single third-party provider configuration.
+type TppcProvider struct {
+	// Name is the identifier for this provider (e.g., "packycode", "custom-provider").
+	Name string `yaml:"name" json:"name"`
+	// Enabled toggles whether this provider is active.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// BaseURL is the API endpoint for this provider.
+	BaseURL string `yaml:"base-url" json:"base-url"`
+	// APIKey is the authentication key for this provider.
+	APIKey string `yaml:"api-key" json:"api-key"`
 }
 
 // PythonAgentConfig removed.
@@ -321,12 +341,17 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Normalize and sanitize Packycode configuration
 	sanitizePackycode(&cfg)
+	// Normalize and sanitize Tppc configuration
+	sanitizeTppc(&cfg)
 	// Normalize Copilot OAuth defaults
 	sanitizeCopilotOAuth(&cfg)
 	// Python Bridge removed; ignore legacy keys if present
 	if !optional {
 		if err := ValidatePackycode(&cfg); err != nil {
 			return nil, fmt.Errorf("invalid packycode configuration: %w", err)
+		}
+		if err := ValidateTppc(&cfg); err != nil {
+			return nil, fmt.Errorf("invalid tppc configuration: %w", err)
 		}
 	}
 
@@ -436,6 +461,75 @@ func ValidatePackycode(cfg *Config) error {
 		return fmt.Errorf("invalid packycode configuration: %s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// ValidateTppc performs strict validation for the Tppc configuration.
+// It ensures required fields are present for enabled providers.
+// Returns nil when configuration is valid or no providers are configured.
+func ValidateTppc(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	providers := cfg.Tppc.Providers
+
+	var problems []string
+	for i, provider := range providers {
+		if !provider.Enabled {
+			// Skip validation for disabled providers
+			continue
+		}
+
+		// Validate enabled provider
+		providerName := provider.Name
+		if providerName == "" {
+			problems = append(problems, fmt.Sprintf("providers[%d].name is required when enabled=true", i))
+		}
+
+		// base-url: required and must be http/https URL
+		base := strings.TrimSpace(provider.BaseURL)
+		if base == "" {
+			if providerName != "" {
+				problems = append(problems, fmt.Sprintf("providers[%d].base-url is required when providers[%d].enabled=true", i, i))
+			} else {
+				problems = append(problems, fmt.Sprintf("providers[%d].base-url is required when enabled=true", i))
+			}
+		} else {
+			if u, err := url.Parse(base); err != nil || u.Scheme == "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+				if providerName != "" {
+					problems = append(problems, fmt.Sprintf("providers[%d].base-url must be a valid http(s) URL (provider: %s)", i, providerName))
+				} else {
+					problems = append(problems, fmt.Sprintf("providers[%d].base-url must be a valid http(s) URL", i))
+				}
+			}
+		}
+
+		// api-key: required
+		if strings.TrimSpace(provider.APIKey) == "" {
+			if providerName != "" {
+				problems = append(problems, fmt.Sprintf("providers[%d].api-key is required when providers[%d].enabled=true", i, i))
+			} else {
+				problems = append(problems, fmt.Sprintf("providers[%d].api-key is required when enabled=true", i))
+			}
+		}
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid tppc configuration: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// sanitizeTppc normalizes and sanitizes Tppc configuration.
+func sanitizeTppc(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	providers := cfg.Tppc.Providers
+	for i := range providers {
+		providers[i].Name = strings.TrimSpace(providers[i].Name)
+		providers[i].BaseURL = strings.TrimSpace(providers[i].BaseURL)
+		providers[i].APIKey = strings.TrimSpace(providers[i].APIKey)
+	}
 }
 
 // sanitizeOpenAICompatibility removes OpenAI-compatibility provider entries that are

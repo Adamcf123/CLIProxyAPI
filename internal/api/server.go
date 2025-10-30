@@ -291,6 +291,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 				have = true
 			}
 		}
+		// DEBUG: Log TPS record attempt for diagnosis
+		log.Debugf("TPS_RECORD_DEBUG: path=%s have=%t completion=%.2f total=%.2f", path, have, completion, total)
+
 		if have {
 			// optional provider/model attribution
 			var provider, model string
@@ -304,12 +307,19 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 					model = s
 				}
 			}
+			// DEBUG: Log provider/model info
+			log.Debugf("TPS_RECORD_DEBUG: provider='%s' model='%s'", provider, model)
+
 			if provider != "" || model != "" {
+				log.Debugf("TPS_RECORD_DEBUG: Calling RecordTPSSampleTagged with provider='%s' model='%s'", provider, model)
 				usage.RecordTPSSampleTagged(provider, model, completion, total)
 			} else {
+				log.Debugf("TPS_RECORD_DEBUG: No provider/model info, calling RecordTPSSample (unlabeled)")
 				usage.RecordTPSSample(completion, total)
 			}
 			c.Set("API_TPS_RECORDED", true)
+		} else {
+			log.Debugf("TPS_RECORD_DEBUG: No TPS data available, skipping record")
 		}
 	})
 	s.wsAuthEnabled.Store(cfg.WebsocketAuth)
@@ -607,6 +617,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/packycode", s.mgmt.GetPackycode)
 		mgmt.PUT("/packycode", s.mgmt.PutPackycode)
 		mgmt.PATCH("/packycode", s.mgmt.PatchPackycode)
+
+		// Third-Party Provider Codex (tppc) management
+		mgmt.GET("/tppc", s.mgmt.GetTppc)
+		mgmt.PUT("/tppc", s.mgmt.PutTppc)
+		mgmt.PATCH("/tppc", s.mgmt.PatchTppc)
 
 		mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
 		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)

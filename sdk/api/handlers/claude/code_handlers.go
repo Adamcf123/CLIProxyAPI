@@ -198,12 +198,12 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 }
 
 func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
-	// v6.1: Intelligent Buffered Streamer strategy
-	// Enhanced buffering with larger buffer size (16KB) and longer flush interval (120ms).
-	// Smart flush only when buffer is sufficiently filled (≥50%), dramatically reducing
-	// flush frequency from ~12.5Hz to ~5-8Hz while maintaining low latency.
-	writer := bufio.NewWriterSize(c.Writer, 16*1024) // 4KB → 16KB
-	ticker := time.NewTicker(120 * time.Millisecond) // 80ms → 120ms
+	// v6.1: Intelligent Buffered Streamer strategy (optimized for reduced latency)
+	// Enhanced buffering with moderate buffer size (8KB) and shorter flush interval (80ms).
+	// Smart flush only when buffer is sufficiently filled (≥50%), improving response time
+	// while maintaining reasonable flush frequency (~8-12Hz).
+	writer := bufio.NewWriterSize(c.Writer, 8*1024) // 16KB → 8KB for better responsiveness
+	ticker := time.NewTicker(80 * time.Millisecond) // 120ms → 80ms for faster flush
 	defer ticker.Stop()
 
 	var chunkIdx int
@@ -220,7 +220,7 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.
 			// Smart flush: only flush when buffer has sufficient data (≥50% full)
 			// This reduces flush frequency while ensuring data flows naturally
 			buffered := writer.Buffered()
-			if buffered >= 8*1024 { // At least 8KB (50% of 16KB buffer)
+			if buffered >= 4*1024 { // At least 4KB (50% of 8KB buffer)
 				if err := writer.Flush(); err != nil {
 					// Error flushing, cancel and return
 					cancel(err)
