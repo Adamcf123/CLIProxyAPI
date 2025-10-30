@@ -28,13 +28,13 @@
 - GIVEN `provider=claude` 的认证条目其 `attributes.base_url` 等于 `https://open.bigmodel.cn/api/anthropic`
 - WHEN 请求 `glm-4.6`
 - THEN 系统 SHALL 注册/路由至 `provider=zhipu`
-- AND SHALL 使用 GlmAnthropicExecutor 完成上游交互
+- AND 系统 SHALL 使用 GlmAnthropicExecutor 完成上游交互
 
 #### Scenario: Route MiniMax-* to minimax executor
 - GIVEN `provider=claude` 的认证条目其 `attributes.base_url` 等于 `https://api.minimaxi.com/anthropic`
 - WHEN 请求 `MiniMax-M2`
 - THEN 系统 SHALL 注册/路由至 `provider=minimax`
-- AND SHALL 使用 MiniMaxAnthropicExecutor 完成上游交互
+- AND 系统 SHALL 使用 MiniMaxAnthropicExecutor 完成上游交互
 
 #### Scenario: Official Claude models
 - GIVEN `provider=claude` 且 `attributes.base_url` 为空或为官方地址

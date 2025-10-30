@@ -6,40 +6,40 @@ TBD - created by archiving change add-zhipu-api-support. Update Purpose after ar
 ### Requirement: Packycode Provider Exposure (Alias to Codex)
 系统 SHALL 将 `packycode` 作为对外 provider 暴露，并在内部执行路径上映射到 Codex 执行器与 OpenAI 模型集合；所有对外列表与筛选（/v1/models、/v0/management/providers、/v0/management/models、/v0/management/tps）均应识别 `packycode`，同时保持既有 Codex 行为不变。
 
-参见：openspec/changes/tps-specified-model/specs/provider-integration/packycode-provider-alias.md
+为保持实现一致性，系统 SHALL 参考 `openspec/changes/tps-specified-model/specs/provider-integration/packycode-provider-alias.md` 作为补充说明
 
 #### Scenario: Management listing and filtering
 - **WHEN** 管理端启用
-- **THEN**
-  - `GET /v0/management/providers` 返回包含 `packycode` 在内的 provider 列表
-  - `GET /v0/management/models?provider=packycode` 返回由 `packycode` 提供的模型（模型元数据含 `providers` 列）
-  - `GET /v0/management/tps?...&provider=packycode` 支持按 `packycode` 过滤窗口聚合
+- **THEN** 系统 SHALL 满足以下条目
+  - 系统 SHALL 在 `GET /v0/management/providers` 返回包含 `packycode` 在内的 provider 列表
+  - 系统 SHALL 在 `GET /v0/management/models?provider=packycode` 返回由 `packycode` 提供的模型（模型元数据含 `providers` 列）
+  - 系统 SHALL 在 `GET /v0/management/tps?...&provider=packycode` 支持按 `packycode` 过滤窗口聚合
 
 ### Requirement: Zhipu Provider Integration (Direct)
 系统 SHALL 在 provider registry 中注册一个 `zhipu` 提供商，占位于执行路径，不改变现有 OpenAI‑compat 行为。
 
 #### Scenario: Provider type registered
 - **WHEN** 系统启动并加载 access/sdk 配置
-- **THEN** `zhipu` 作为合法提供商类型出现在 registry 中
-- **AND** 未配置 `ZHIPU_API_KEY` 时不启用任何直连客户端
+- **THEN** 系统 SHALL 将 `zhipu` 作为合法提供商类型出现在 registry 中
+- **AND** 系统 SHALL 在未配置 `ZHIPU_API_KEY` 时不启用任何直连客户端
 
 #### Scenario: Model mapping coexists
 - **GIVEN** 模型 `glm-*` 已通过 OpenAI‑compat 上游可用
 - **WHEN** 启用 `zhipu` 提供商
-- **THEN** model registry 中 `glm-*` 同时显示 `openai-compat` 与 `zhipu` 两个提供者
+- **THEN** 系统 SHALL 在 model registry 中显示 `glm-*` 的 `openai-compat` 与 `zhipu` 两个提供者
 
 #### Scenario: Direct executor (non-stream)
 - **GIVEN** 存在 `zhipu-api-key[0]` 且含 `api-key` 与 `base-url`
 - **WHEN** 请求路由到 `zhipu` 执行器分支（非流式）
-- **THEN** 转换为 OpenAI-compatible chat completions 调用 `${base-url}/chat/completions`
-- **AND** 使用 `Authorization: Bearer <api-key>` 与 `Content-Type: application/json`
-- **AND** 成功 2xx 时返回翻译后的响应；非 2xx 返回上游错误消息与对应状态码
+- **THEN** 系统 SHALL 转换为 OpenAI-compatible chat completions 调用 `${base-url}/chat/completions`
+- **AND** 系统 SHALL 使用 `Authorization: Bearer <api-key>` 与 `Content-Type: application/json`
+- **AND** 系统 SHALL 在成功 2xx 时返回翻译后的响应；在非 2xx 时返回上游错误消息与对应状态码
 
 #### Scenario: Direct executor (stream)
 - **GIVEN** 存在 `zhipu-api-key[0]` 且含 `api-key` 与 `base-url`
 - **WHEN** 请求路由到 `zhipu` 执行器分支（流式）
-- **THEN** 以 SSE 方式转发 `${base-url}/chat/completions` 的流响应
-- **AND** 逐行传入翻译器，保留使用量统计并输出流式片段
+- **THEN** 系统 SHALL 以 SSE 方式转发 `${base-url}/chat/completions` 的流响应
+- **AND** 系统 SHALL 逐行传入翻译器，保留使用量统计并输出流式片段
 
 ### Requirement: Provider Model Inventory Exposure (Copilot Rules)
 The system SHALL treat `copilot` as an independent provider whose model inventory is not mirrored from OpenAI.
@@ -65,7 +65,7 @@ The system SHALL treat `copilot` as an independent provider whose model inventor
 - GIVEN an active copilot auth with metadata.refresh_in and metadata.github_access_token
 - WHEN current_time >= (last_refresh + refresh_in - safety_margin)
 - THEN the system SHALL invoke the copilot refresh path using GitHub API `/copilot_internal/v2/token`
-- AND update `access_token`, `expires_at`, `refresh_in`, and `last_refresh` on success
+- AND the system SHALL update `access_token`, `expires_at`, `refresh_in`, and `last_refresh` on success
 
 ### Requirement: Claude base_url detection for Zhipu Anthropic compatibility
 系统 SHALL 基于 `provider=claude` 的认证条目 `attributes.base_url` 进行上游兼容层识别，以确保模型清单准确反映可用后端。
@@ -99,24 +99,81 @@ The system SHALL treat `copilot` as an independent provider whose model inventor
 
 ### Requirement: Anthropic-compatible Executor Mapping
 系统 SHALL 为 Anthropic 兼容上游采用“专属执行器”映射，而非统一走 Claude 执行器：
-- 官方 Claude → ClaudeExecutor（`provider=claude`）
-- 智谱兼容 → GlmAnthropicExecutor（`provider=zhipu`）
-- MiniMax 兼容 → MiniMaxAnthropicExecutor（`provider=minimax`）
+- 系统 SHALL 将官方 Claude 映射为 ClaudeExecutor（`provider=claude`）
+- 系统 SHALL 将智谱兼容映射为 GlmAnthropicExecutor（`provider=zhipu`）
+- 系统 SHALL 将 MiniMax 兼容映射为 MiniMaxAnthropicExecutor（`provider=minimax`）
 
 #### Scenario: Route glm-* to zhipu executor
 - GIVEN `provider=claude` 的认证条目其 `attributes.base_url` 等于 `https://open.bigmodel.cn/api/anthropic`
 - WHEN 请求 `glm-4.6`
 - THEN 系统 SHALL 注册/路由至 `provider=zhipu`
-- AND SHALL 使用 GlmAnthropicExecutor 完成上游交互
+- AND 系统 SHALL 使用 GlmAnthropicExecutor 完成上游交互
 
 #### Scenario: Route MiniMax-* to minimax executor
 - GIVEN `provider=claude` 的认证条目其 `attributes.base_url` 等于 `https://api.minimaxi.com/anthropic`
 - WHEN 请求 `MiniMax-M2`
 - THEN 系统 SHALL 注册/路由至 `provider=minimax`
-- AND SHALL 使用 MiniMaxAnthropicExecutor 完成上游交互
+- AND 系统 SHALL 使用 MiniMaxAnthropicExecutor 完成上游交互
 
 #### Scenario: Official Claude models
 - GIVEN `provider=claude` 且 `attributes.base_url` 为空或为官方地址
 - WHEN 请求 `claude-*`
 - THEN 系统 SHALL 使用 ClaudeExecutor 完成上游交互
+
+### Requirement: MiniMax Anthropic-compatible registration and routing
+系统 SHALL 基于认证条目的实际后端特征注册可用模型列表与路由执行器，以保证 `/v1/models` 的可用性与准确性。
+
+#### Scenario: Claude base_url points to MiniMax Anthropic compatibility
+- **WHEN** `provider=claude` 的认证条目其 `attributes.base_url` 等于 `https://api.minimaxi.com/anthropic`
+- **THEN** 系统 SHALL 仅注册模型 `MiniMax-M2`
+- **AND** 系统 SHALL 不注册任何 `claude-*` 模型
+- **AND** 系统 SHALL 将 Provider 视为 `minimax` 并由 MiniMax 专属执行器处理
+
+#### Scenario: Route minimax-* to minimax executor (heuristic fallback)
+- **GIVEN** 模型名以 `minimax-` 为前缀
+- **WHEN** 动态注册表未返回 Provider
+- **THEN** 系统 SHALL 将 Provider 识别为 `minimax`
+
+#### Scenario: Pre-register MiniMax executor (no auth)
+- **GIVEN** 尚未配置 MiniMax 认证
+- **WHEN** 用户请求 `MiniMax-M2`
+- **THEN** 系统 SHALL 返回 `auth_not_found`（而非执行器缺失），以保证错误类型稳定
+
+#### Examples
+
+#### Example Request (OpenAI-compatible style)
+```http
+POST /v1/chat/completions HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer sk-xxxx
+
+{
+  "model": "MiniMax-M2",
+  "messages": [
+    {"role": "user", "content": "hi"}
+  ],
+  "stream": false
+}
+```
+
+#### Example Response (error when no auth)
+```json
+{
+  "error": {
+    "type": "auth_error",
+    "code": "auth_not_found",
+    "message": "missing credentials for provider minimax"
+  }
+}
+```
+
+#### Example Response (models listing under Claude handler)
+```json
+{
+  "object": "list",
+  "data": [
+    {"id": "MiniMax-M2", "object": "model", "owned_by": "minimax"}
+  ]
+}
+```
 

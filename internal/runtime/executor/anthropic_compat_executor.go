@@ -64,6 +64,10 @@ func (e *AnthropicCompatExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return resp, err
 	}
 	applyClaudeHeaders(httpReq, apiKey, false)
+	// Minimax 专属：为避免上游返回 zstd 压缩导致下游客户端解压不一致，强制不压缩
+	if strings.EqualFold(e.Identifier(), "minimax") {
+		httpReq.Header.Set("Accept-Encoding", "identity")
+	}
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -140,6 +144,10 @@ func (e *AnthropicCompatExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return nil, err
 	}
 	applyClaudeHeaders(httpReq, apiKey, true)
+	// Minimax 专属：流式路径也禁用上游压缩，避免 zstd SSE 需额外解压
+	if strings.EqualFold(e.Identifier(), "minimax") {
+		httpReq.Header.Set("Accept-Encoding", "identity")
+	}
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID

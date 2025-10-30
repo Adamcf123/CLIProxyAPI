@@ -150,6 +150,9 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 							}
 							functionCallMessage, _ = sjson.Set(functionCallMessage, "name", name)
 						}
+						if shouldDropBashOutputCall(messageContentResult.Get("name").String(), messageContentResult.Get("input").Raw) {
+							break
+						}
 						functionCallMessage, _ = sjson.Set(functionCallMessage, "arguments", messageContentResult.Get("input").Raw)
 						template, _ = sjson.SetRaw(template, "input.-1", functionCallMessage)
 					case "tool_result":

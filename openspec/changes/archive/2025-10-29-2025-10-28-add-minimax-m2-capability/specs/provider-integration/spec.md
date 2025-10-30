@@ -19,7 +19,7 @@
 - **WHEN** 用户请求 `MiniMax-M2`
 - **THEN** 系统 SHALL 返回 `auth_not_found`（而非执行器缺失），以保证错误类型稳定
 
-#### Examples
+### Examples
 
 #### Example Request (OpenAI-compatible style)
 ```http
