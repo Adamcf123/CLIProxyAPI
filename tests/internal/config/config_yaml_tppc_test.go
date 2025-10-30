@@ -30,8 +30,8 @@ func TestConfigYamlTppc(t *testing.T) {
 		if packycodeProvider.Name != "packycode" {
 			t.Errorf("Expected provider name 'packycode', got '%s'", packycodeProvider.Name)
 		}
-		if packycodeProvider.Enabled {
-			t.Error("Expected packycode provider to be disabled by default")
+		if !packycodeProvider.Enabled {
+			t.Error("Expected packycode provider to be enabled by default")
 		}
 		if packycodeProvider.BaseURL != "https://codex-api-slb.packycode.com/v1" {
 			t.Errorf("Expected base-url 'https://codex-api-slb.packycode.com/v1', got '%s'", packycodeProvider.BaseURL)
@@ -41,10 +41,6 @@ func TestConfigYamlTppc(t *testing.T) {
 		}
 	}
 
-	// 验证与packycode配置的兼容性
-	if cfg.Packycode.Enabled {
-		t.Error("Expected packycode.enabled=false in config.yaml")
-	}
 }
 
 // findProvider帮助函数

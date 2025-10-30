@@ -745,31 +745,41 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 	cfg := w.config
 	w.clientsMutex.RUnlock()
 	if cfg != nil {
-		// Packycode synthesized auth (External Provider=packycode; internal mapped to codex executor)
-		if cfg.Packycode.Enabled {
-			base := strings.TrimSpace(cfg.Packycode.BaseURL)
-			if base != "" {
-				key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
-				id, token := idGen.next("packycode:codex", key, base)
-				attrs := map[string]string{
-					"source":   "config:packycode",
-					"base_url": base,
-				}
-				if key != "" {
-					attrs["api_key"] = key
-				}
-				a := &coreauth.Auth{
-					ID:         id,
-					Provider:   "packycode",
-					Label:      "packycode",
-					Status:     coreauth.StatusActive,
-					Attributes: attrs,
-					CreatedAt:  now,
-					UpdatedAt:  now,
-				}
-				out = append(out, a)
-				_ = token
+		// Tppc providers synthesized auth entries (external provider names map to Codex executor)
+		for i := range cfg.Tppc.Providers {
+			provider := cfg.Tppc.Providers[i]
+			if !provider.Enabled {
+				continue
 			}
+			name := strings.TrimSpace(provider.Name)
+			if name == "" {
+				continue
+			}
+			base := strings.TrimSpace(provider.BaseURL)
+			if base == "" {
+				continue
+			}
+			apiKey := strings.TrimSpace(provider.APIKey)
+			idKind := fmt.Sprintf("tppc:%s", strings.ToLower(name))
+			id, token := idGen.next(idKind, apiKey, base)
+			attrs := map[string]string{
+				"source":   fmt.Sprintf("config:tppc[%s]", strings.ToLower(name)),
+				"base_url": base,
+			}
+			if apiKey != "" {
+				attrs["api_key"] = apiKey
+			}
+			a := &coreauth.Auth{
+				ID:         id,
+				Provider:   name,
+				Label:      name,
+				Status:     coreauth.StatusActive,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			out = append(out, a)
+			_ = token
 		}
 		// Gemini official API keys -> synthesize auths
 		for i := range cfg.GlAPIKey {
@@ -979,32 +989,6 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 					createdEntries++
 				}
 
-				// Packycode synthesized auth (External Provider=packycode; internal mapped to codex executor)
-				if cfg.Packycode.Enabled {
-					base := strings.TrimSpace(cfg.Packycode.BaseURL)
-					if base != "" {
-						key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
-						id, token := idGen.next("packycode:codex", key, base)
-						attrs := map[string]string{
-							"source":   "config:packycode",
-							"base_url": base,
-						}
-						if key != "" {
-							attrs["api_key"] = key
-						}
-						a := &coreauth.Auth{
-							ID:         id,
-							Provider:   "packycode",
-							Label:      "packycode",
-							Status:     coreauth.StatusActive,
-							Attributes: attrs,
-							CreatedAt:  now,
-							UpdatedAt:  now,
-						}
-						out = append(out, a)
-						_ = token // reserved for future tokenized source labels if needed
-					}
-				}
 			}
 			if createdEntries == 0 {
 				idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
@@ -1419,32 +1403,6 @@ func buildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 		for _, c := range compat {
 			changes = append(changes, "  "+c)
 		}
-	}
-
-	// Packycode (explicit fields)
-	if oldCfg.Packycode.Enabled != newCfg.Packycode.Enabled {
-		changes = append(changes, fmt.Sprintf("packycode.enabled: %t -> %t", oldCfg.Packycode.Enabled, newCfg.Packycode.Enabled))
-	}
-	if strings.TrimSpace(oldCfg.Packycode.BaseURL) != strings.TrimSpace(newCfg.Packycode.BaseURL) {
-		changes = append(changes, fmt.Sprintf("packycode.base-url: %s -> %s", strings.TrimSpace(oldCfg.Packycode.BaseURL), strings.TrimSpace(newCfg.Packycode.BaseURL)))
-	}
-	if oldCfg.Packycode.RequiresOpenAIAuth != newCfg.Packycode.RequiresOpenAIAuth {
-		changes = append(changes, fmt.Sprintf("packycode.requires-openai-auth: %t -> %t", oldCfg.Packycode.RequiresOpenAIAuth, newCfg.Packycode.RequiresOpenAIAuth))
-	}
-	if !strings.EqualFold(strings.TrimSpace(oldCfg.Packycode.WireAPI), strings.TrimSpace(newCfg.Packycode.WireAPI)) {
-		changes = append(changes, fmt.Sprintf("packycode.wire-api: %s -> %s", strings.TrimSpace(oldCfg.Packycode.WireAPI), strings.TrimSpace(newCfg.Packycode.WireAPI)))
-	}
-	if oldCfg.Packycode.Privacy.DisableResponseStorage != newCfg.Packycode.Privacy.DisableResponseStorage {
-		changes = append(changes, fmt.Sprintf("packycode.privacy.disable-response-storage: %t -> %t", oldCfg.Packycode.Privacy.DisableResponseStorage, newCfg.Packycode.Privacy.DisableResponseStorage))
-	}
-	if strings.TrimSpace(oldCfg.Packycode.Defaults.Model) != strings.TrimSpace(newCfg.Packycode.Defaults.Model) {
-		changes = append(changes, fmt.Sprintf("packycode.defaults.model: %s -> %s", strings.TrimSpace(oldCfg.Packycode.Defaults.Model), strings.TrimSpace(newCfg.Packycode.Defaults.Model)))
-	}
-	if !strings.EqualFold(strings.TrimSpace(oldCfg.Packycode.Defaults.ModelReasoningEffort), strings.TrimSpace(newCfg.Packycode.Defaults.ModelReasoningEffort)) {
-		changes = append(changes, fmt.Sprintf("packycode.defaults.model-reasoning-effort: %s -> %s", strings.TrimSpace(oldCfg.Packycode.Defaults.ModelReasoningEffort), strings.TrimSpace(newCfg.Packycode.Defaults.ModelReasoningEffort)))
-	}
-	if strings.TrimSpace(oldCfg.Packycode.Credentials.OpenAIAPIKey) != strings.TrimSpace(newCfg.Packycode.Credentials.OpenAIAPIKey) {
-		changes = append(changes, "packycode.credentials.openai-api-key: updated")
 	}
 
 	return changes

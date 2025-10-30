@@ -10,7 +10,7 @@
 
 ## Summary
 
-将原有的单一 packycode 提供商支持升级为 Third-Party Provider Codex (tppc) 多提供商支持系统，实现更灵活、可扩展的第三方代码 AI 服务集成能力。
+将原有的单一 packycode 提供商支持升级为 Third-Party Provider Codex (tppc) 多提供商支持系统，实现更灵活、可扩展的第三方代码 AI 服务集成能力。（2025-11 后续维护：packycode 独立配置已在代码库中移除，仅保留 tppc providers 作为唯一入口。）
 
 ## Motivation
 
@@ -140,17 +140,16 @@ tppc:
 
 ## Backward Compatibility
 
-✅ **100% 向后兼容**
-- 现有 `packycode` 配置保持不变
-- 原有功能继续正常工作
-- tppc 作为独立增强功能
+⚠️ **注意：2025-11 更新已废弃 packycode 独立配置**
+- 归档时（2025-10-30）仍保持 packycode 配置兼容；后续维护版本中已移除 `packycode` 根配置与相关管理端点
+- 当前仅支持通过 `tppc.providers` 声明任意第三方提供商（名称可继续使用 "packycode" 作为别名）
 
 ## Migration Path
 
-1. **当前状态**: packycode 和 tppc 并存
-2. **建议**: 新项目直接使用 tppc
-3. **迁移**: 将 packycode 配置迁移到 tppc 格式
-4. **未来**: 可考虑废弃 packycode（需提前规划）
+1. **2025-10 状态**: packycode 和 tppc 并存（归档阶段）
+2. **2025-11 起**: packycode 根配置被移除，所有环境需改用 `tppc.providers`
+3. **迁移**: 将原先的 `packycode` 字段映射为 `tppc.providers` 内的一项（名称可继续为 `"packycode"` 以保持外部标识）
+4. **未来**: 仅维护 tppc 多提供商路径
 
 ## Performance Impact
 
@@ -174,27 +173,21 @@ tppc:
 ## Deployment Considerations
 
 ### Configuration Updates
-- 更新 config.example.yaml
-- 更新 config.yaml 示例
-- 更新文档和指南
-
-### CLI Changes
-- 新增 `--tppc` 标志
-- 保持现有标志不变
+- 更新 config.example.yaml / config.yaml 示例以展示 tppc.providers
+- 后续维护已删除 packycode 字段示例
 
 ### API Changes
 - 新增 `/v0/management/tppc` 端点
-- 现有 API 保持不变
+- （2025-11 更新）移除 `/v0/management/packycode` 端点
 
 ## Rollback Plan
 
 ### Safe Rollback
 - tppc 功能可独立禁用
-- 保留 packycode 作为 fallback
-- 配置可快速回滚
+- 归档版本可保留 packycode 作为 fallback；最新代码已无 packycode 配置项
 
 ### Emergency Procedures
-- 使用现有 packycode 配置
+- 使用 tppc providers 配置
 - 禁用 tppc 功能
 - 恢复原有配置
 

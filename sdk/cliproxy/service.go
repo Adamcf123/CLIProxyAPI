@@ -5,8 +5,6 @@ package cliproxy
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -391,6 +389,15 @@ func (s *Service) ensureExecutorsForAuth(a *coreauth.Auth) {
 		s.coreManager.RegisterExecutor(executor.NewIFlowExecutor(s.cfg))
 	default:
 		providerKey := strings.ToLower(strings.TrimSpace(a.Provider))
+		if a.Attributes != nil {
+			if source := strings.TrimSpace(a.Attributes["source"]); strings.HasPrefix(source, "config:tppc[") {
+				if providerKey == "" {
+					providerKey = "tppc"
+				}
+				s.coreManager.RegisterExecutor(executor.NewCodexExecutorWithID(s.cfg, providerKey))
+				return
+			}
+		}
 		if providerKey == "" {
 			providerKey = "openai-compatibility"
 		}
@@ -591,11 +598,8 @@ func (s *Service) Run(ctx context.Context) error {
 		s.hooks.OnAfterStart(s)
 	}
 
-	// Ensure Packycode and Copilot models are registered for /v1/models visibility
-	s.ensurePackycodeModelsRegistered(s.cfg)
+	// Ensure Copilot models are registered for /v1/models visibility
 	s.ensureCopilotModelsRegistered(s.cfg)
-	// Enforce Codex toggle based on Packycode state
-	s.enforceCodexToggle(s.cfg)
 
 	var watcherWrapper *WatcherWrapper
 	reloadCallback := func(newCfg *config.Config) {
@@ -613,12 +617,9 @@ func (s *Service) Run(ctx context.Context) error {
 		s.cfgMu.Lock()
 		s.cfg = newCfg
 		s.cfgMu.Unlock()
-		// Keep model registry in sync for Packycode and Copilot
-		s.ensurePackycodeModelsRegistered(newCfg)
+		// Keep model registry in sync for Copilot
 		s.ensureCopilotModelsRegistered(newCfg)
 		s.rebindExecutors()
-		// Re-apply codex toggle on config changes
-		s.enforceCodexToggle(newCfg)
 	}
 
 	watcherWrapper, err = s.watcherFactory(s.configPath, s.cfg.AuthDir, reloadCallback)
@@ -719,149 +720,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		usage.StopDefault()
 	})
 	return shutdownErr
-}
-
-// packycodeModelsClientID computes a stable registry client ID for Packycode models
-// based on base-url and openai api key. Returns (id, true) when packycode is enabled
-// and configuration is valid; otherwise ("", false).
-func (s *Service) packycodeModelsClientID(cfg *config.Config) (string, bool) {
-	if cfg == nil || !cfg.Packycode.Enabled {
-		return "", false
-	}
-	if err := config.ValidatePackycode(cfg); err != nil {
-		return "", false
-	}
-	base := strings.TrimSpace(cfg.Packycode.BaseURL)
-	key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
-	h := sha256.New()
-	h.Write([]byte("packycode:models"))
-	h.Write([]byte{0})
-	h.Write([]byte(base))
-	h.Write([]byte{0})
-	h.Write([]byte(key))
-	digest := hex.EncodeToString(h.Sum(nil))
-	if len(digest) > 12 {
-		digest = digest[:12]
-	}
-	return "packycode:models:" + digest, true
-}
-
-// ensurePackycodeModelsRegistered registers/unregisters Packycode OpenAI models
-// in the global model registry depending on current configuration state.
-func (s *Service) ensurePackycodeModelsRegistered(cfg *config.Config) {
-	id, ok := s.packycodeModelsClientID(cfg)
-	if !ok {
-		// Best-effort removal using deterministic ID if any
-		// Build ID ignoring enabled flag to attempt cleanup when toggled off
-		base := strings.TrimSpace(cfg.Packycode.BaseURL)
-		key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
-		h := sha256.New()
-		h.Write([]byte("packycode:models"))
-		h.Write([]byte{0})
-		h.Write([]byte(base))
-		h.Write([]byte{0})
-		h.Write([]byte(key))
-		digest := hex.EncodeToString(h.Sum(nil))
-		if len(digest) > 12 {
-			digest = digest[:12]
-		}
-		if digest != "" {
-			GlobalModelRegistry().UnregisterClient("packycode:models:" + digest)
-		}
-		return
-	}
-	// Ensure executor exists early to avoid executor_not_found
-	if s.coreManager != nil {
-		// Register codex executor but expose provider name as 'packycode' via alias (handled in ensureExecutorsForAuth)
-		s.coreManager.RegisterExecutor(executor.NewCodexExecutorWithID(s.cfg, "packycode"))
-	}
-	models := registry.GetOpenAIModels()
-	models = filterModelsByID(models, copilotExclusiveModelIDs)
-	// Register models under external provider key 'packycode' (internally still served by codex executor)
-	GlobalModelRegistry().RegisterClient(id, "packycode", models)
-	// Also ensure there is at least one runtime auth for provider 'packycode'
-	if s.coreManager != nil {
-		base := strings.TrimSpace(cfg.Packycode.BaseURL)
-		key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
-		// Derive a stable auth ID similar to watcher synth rule
-		ah := sha256.New()
-		ah.Write([]byte("packycode:codex"))
-		ah.Write([]byte{0})
-		ah.Write([]byte(key))
-		ah.Write([]byte{0})
-		ah.Write([]byte(base))
-		ad := hex.EncodeToString(ah.Sum(nil))
-		if len(ad) > 12 {
-			ad = ad[:12]
-		}
-		authID := "packycode:codex:" + ad
-		now := time.Now()
-		runtimeAuth := &coreauth.Auth{
-			ID:         authID,
-			Provider:   "packycode",
-			Label:      "packycode",
-			Status:     coreauth.StatusActive,
-			Attributes: map[string]string{"api_key": key, "base_url": base, "source": "packycode"},
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		// Register or update
-		if _, ok := s.coreManager.GetByID(authID); ok {
-			_, _ = s.coreManager.Update(context.Background(), runtimeAuth)
-		} else {
-			_, _ = s.coreManager.Register(context.Background(), runtimeAuth)
-		}
-	}
-}
-
-// enforceCodexToggle disables or re-enables codex auths according to packycode.enabled.
-// When packycode is enabled: disable all provider=codex auths and mark attribute toggle_by=packycode.
-// When packycode is disabled: re-enable only those codex auths previously disabled by this toggle.
-func (s *Service) enforceCodexToggle(cfg *config.Config) {
-	if s == nil || s.coreManager == nil || cfg == nil {
-		return
-	}
-	enableCodex := !cfg.Packycode.Enabled
-	auths := s.coreManager.List()
-	now := time.Now()
-	for _, a := range auths {
-		if a == nil || !strings.EqualFold(a.Provider, "codex") {
-			continue
-		}
-		// Ensure attributes map exists
-		if a.Attributes == nil {
-			a.Attributes = make(map[string]string)
-		}
-		toggledBy := strings.TrimSpace(a.Attributes["toggle_by"])
-		if !enableCodex {
-			// packycode enabled -> disable codex
-			if a.Disabled {
-				// already disabled, keep mark
-				if toggledBy == "" {
-					a.Attributes["toggle_by"] = "packycode"
-				}
-			} else {
-				a.Disabled = true
-				a.Status = coreauth.StatusDisabled
-				a.Attributes["toggle_by"] = "packycode"
-				a.UpdatedAt = now
-			}
-		} else {
-			// packycode disabled -> re-enable codex only if disabled by packycode
-			if a.Disabled && strings.EqualFold(toggledBy, "packycode") {
-				a.Disabled = false
-				a.Status = coreauth.StatusActive
-				delete(a.Attributes, "toggle_by")
-				a.UpdatedAt = now
-			} else {
-				continue
-			}
-		}
-		// Persist via Update
-		_, _ = s.coreManager.Update(context.Background(), a)
-		// Re-register models for the auth to reflect provider availability
-		s.registerModelsForAuth(a)
-	}
 }
 
 func (s *Service) ensureAuthDir() error {
@@ -994,8 +852,17 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	case "zhipu":
 		models = registry.GetZhipuModels()
 	default:
-		// Handle OpenAI-compatibility providers by name using config
-		if s.cfg != nil {
+		isTPPC := false
+		if a.Attributes != nil {
+			if source := strings.ToLower(strings.TrimSpace(a.Attributes["source"])); strings.HasPrefix(source, "config:tppc[") {
+				isTPPC = true
+			}
+		}
+		if isTPPC {
+			// TPPC 提供商应共享 Codex(OpenAI) 模型集合
+			models = filterModelsByID(registry.GetOpenAIModels(), copilotExclusiveModelIDs)
+		} else if s.cfg != nil {
+			// Handle OpenAI-compatibility providers by name using config
 			providerKey := provider
 			compatName := strings.TrimSpace(a.Provider)
 			isCompatAuth := false

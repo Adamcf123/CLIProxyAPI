@@ -613,11 +613,6 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
 		mgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
 
-		// Packycode management
-		mgmt.GET("/packycode", s.mgmt.GetPackycode)
-		mgmt.PUT("/packycode", s.mgmt.PutPackycode)
-		mgmt.PATCH("/packycode", s.mgmt.PatchPackycode)
-
 		// Third-Party Provider Codex (tppc) management
 		mgmt.GET("/tppc", s.mgmt.GetTppc)
 		mgmt.PUT("/tppc", s.mgmt.PutTppc)
@@ -1003,20 +998,14 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		openAICompatCount += len(entry.APIKeys)
 	}
 
-	packycodeCount := 0
-	if cfg.Packycode.Enabled && strings.TrimSpace(cfg.Packycode.BaseURL) != "" {
-		packycodeCount = 1
-	}
-
-	total := authFiles + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount + packycodeCount
-	fmt.Printf("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat + %d Packycode)\n",
+	total := authFiles + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
+	fmt.Printf("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)\n",
 		total,
 		authFiles,
 		glAPIKeyCount,
 		claudeAPIKeyCount,
 		codexAPIKeyCount,
 		openAICompatCount,
-		packycodeCount,
 	)
 }
 

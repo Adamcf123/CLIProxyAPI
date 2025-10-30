@@ -104,22 +104,7 @@ ws-auth: false
 copilot:
   refresh-safety-margin-seconds: 60
 
-# Packycode (optional): forward Claude Code compatible requests to the Packycode upstream
-#packycode:
-#  enabled: false
-#  base-url: "https://codex-api.packycode.com/v1"
-#  requires-openai-auth: true
-#  wire-api: "responses" # fixed value
-#  privacy:
-#    disable-response-storage: true
-#  defaults:
-#    model: "gpt-5"
-#    model-reasoning-effort: "high" # one of: low|medium|high
-#  credentials:
-#    openai-api-key: "sk-OPENAI-XXXX..."
-
 # Third-Party Provider Codex (tppc): support multiple third-party providers for Codex API
-# Note: This replaces and extends the packycode configuration with multi-provider support
 #tppc:
 #  providers:
 #    - name: "packycode" # Provider identifier (e.g., packycode, custom-provider, etc.)
@@ -136,4 +121,3 @@ copilot:
 # - privacy.disable-response-storage: true
 # - defaults.model: "gpt-5"
 # - defaults.model-reasoning-effort: "high"
-

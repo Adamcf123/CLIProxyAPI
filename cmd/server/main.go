@@ -64,7 +64,6 @@ func main() {
 	var projectID string
 	var configPath string
 	var password string
-	var registerPackycode bool
 	var registerTppc bool
 
 	// Define command-line flags for different operation modes.
@@ -79,7 +78,6 @@ func main() {
 	flag.StringVar(&projectID, "project_id", "", "Project ID (Gemini only, not required)")
 	flag.StringVar(&configPath, "config", DefaultConfigPath, "Configure File Path")
 	flag.StringVar(&password, "password", "", "")
-	flag.BoolVar(&registerPackycode, "packycode", false, "Register Packycode OpenAI models at startup (requires valid packycode config)")
 	flag.BoolVar(&registerTppc, "tppc", false, "Register tppc providers' OpenAI models at startup (requires valid tppc config)")
 
 	flag.CommandLine.Usage = func() {
@@ -368,13 +366,6 @@ func main() {
 		cfg = &config.Config{}
 	}
 
-	// Optional: proactively register Packycode models when requested via CLI flag.
-	if registerPackycode {
-		if err := registerPackycodeModels(cfg); err != nil {
-			log.Fatalf("failed to register packycode models: %v", err)
-		}
-	}
-
 	// Optional: proactively register tppc providers' models when requested via CLI flag.
 	if registerTppc {
 		if err := registerTppcModels(cfg); err != nil {
@@ -468,41 +459,6 @@ func main() {
 		managementasset.StartAutoUpdater(context.Background(), configFilePath)
 		cmd.StartService(cfg, configFilePath, password)
 	}
-}
-
-// registerPackycodeModels registers OpenAI/GPT models under provider 'codex' when
-// packycode is enabled and configuration passes validation.
-func registerPackycodeModels(cfg *config.Config) error {
-	if cfg == nil {
-		return fmt.Errorf("config is nil")
-	}
-	// Validate strictly; when disabled, nothing to do
-	if err := config.ValidatePackycode(cfg); err != nil {
-		return fmt.Errorf("invalid packycode configuration: %w", err)
-	}
-	if !cfg.Packycode.Enabled {
-		log.Info("packycode flag ignored: packycode.enabled=false")
-		return nil
-	}
-	base := strings.TrimSpace(cfg.Packycode.BaseURL)
-	key := strings.TrimSpace(cfg.Packycode.Credentials.OpenAIAPIKey)
-	// Build a stable client ID for model registry fallback
-	h := sha256.New()
-	h.Write([]byte("packycode:models"))
-	h.Write([]byte{0})
-	h.Write([]byte(base))
-	h.Write([]byte{0})
-	h.Write([]byte(key))
-	digest := hex.EncodeToString(h.Sum(nil))
-	if len(digest) > 12 {
-		digest = digest[:12]
-	}
-	clientID := "packycode:models:" + digest
-	models := registry.GetOpenAIModels()
-	// 对外 provider=packycode（内部仍由 codex 执行器处理）
-	cliproxy.GlobalModelRegistry().RegisterClient(clientID, "packycode", models)
-	log.Infof("registered packycode models into registry (client=%s, provider=packycode, models=%d)", clientID, len(models))
-	return nil
 }
 
 // registerTppcModels registers OpenAI/GPT models for all enabled tppc providers.

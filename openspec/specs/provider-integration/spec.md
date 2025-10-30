@@ -3,10 +3,14 @@
 ## Purpose
 TBD - created by archiving change add-zhipu-api-support. Update Purpose after archive.
 ## Requirements
-### Requirement: Packycode Provider Exposure (Alias to Codex)
-系统 SHALL 将 `packycode` 作为对外 provider 暴露，并在内部执行路径上映射到 Codex 执行器与 OpenAI 模型集合；所有对外列表与筛选（/v1/models、/v0/management/providers、/v0/management/models、/v0/management/tps）均应识别 `packycode`，同时保持既有 Codex 行为不变。
+### Requirement: Packycode Provider Exposure (via tppc alias)
+系统 SHALL 支持通过 tppc providers 暴露 `packycode` 作为对外 provider，并在内部执行路径上映射到 Codex 执行器与 OpenAI 模型集合；所有对外列表与筛选（/v1/models、/v0/management/providers、/v0/management/models、/v0/management/tps）均应识别 `packycode`，同时保持既有 Codex 行为不变。
 
-为保持实现一致性，系统 SHALL 参考 `openspec/changes/tps-specified-model/specs/provider-integration/packycode-provider-alias.md` 作为补充说明
+#### Scenario: Alias provided by tppc configuration
+- **GIVEN** `tppc.providers` 中存在名称为 `packycode` 且 `enabled=true` 的提供商
+- **WHEN** 系统加载配置或执行 `--tppc` 模型注册流程
+- **THEN** 系统 SHALL 将该提供商注册为外部标识 `packycode`
+- **AND** 系统 SHALL 复用 Codex 执行路径处理其请求
 
 ### Requirement: TPPC Multi-Provider Support
 系统 SHALL 支持 Third-Party Provider Codex (tppc) 多提供商架构，允许配置多个独立的第三方提供商，实现更灵活的提供商管理和切换能力。
@@ -36,10 +40,10 @@ TBD - created by archiving change add-zhipu-api-support. Update Purpose after ar
   - `PATCH /v0/management/tppc` - 部分更新 tppc 配置
 - **AND** 系统 SHALL 验证所有启用的提供商具有必需字段（name、base-url、api-key）
 
-#### Scenario: Backward compatibility
-- **WHEN** 系统同时存在 packycode 和 tppc 配置
-- **THEN** 系统 SHALL 保持两种配置格式的兼容性
-- **AND** 系统 SHALL 确保现有 packycode 功能不受 tppc 配置影响
+#### Scenario: Legacy packycode configuration removed
+- **WHEN** 系统加载配置
+- **THEN** 系统 SHALL 忽略（并拒绝持久化）已弃用的根级 `packycode` 配置段
+- **AND** 系统 SHALL 要求通过 `tppc.providers` 声明任何第三方提供商（包括名称为 `packycode` 的别名）
 
 #### Scenario: Management listing and filtering
 - **WHEN** 管理端启用
@@ -209,4 +213,3 @@ Authorization: Bearer sk-xxxx
   ]
 }
 ```
-
