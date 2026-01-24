@@ -123,6 +123,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
+	body = convertThinkingForXAIO(baseURL, body)
 
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
@@ -264,6 +265,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
+	body = convertThinkingForXAIO(baseURL, body)
 
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
@@ -420,6 +422,8 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		body = checkSystemInstructions(body)
 	}
 
+	body = convertThinkingForXAIO(baseURL, body)
+
 	// Extract betas from body and convert to header (for count_tokens too)
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
@@ -556,6 +560,46 @@ func disableThinkingIfToolChoiceForced(body []byte) []byte {
 		body, _ = sjson.DeleteBytes(body, "thinking")
 	}
 	return body
+}
+
+// convertThinkingForXAIO converts Anthropic thinking format to Gemini thinkingConfig format
+// for XAIO-G upstream, which requires thinking to be in Gemini format.
+//
+// Anthropic format: thinking: {type: "enabled", budget_tokens: N}
+// Gemini format: generationConfig.thinkingConfig.thinkingBudget: N
+func convertThinkingForXAIO(baseURL string, body []byte) []byte {
+	if !isXAIOBaseURL(baseURL) {
+		return body
+	}
+
+	// Check if thinking is enabled
+	thinkingType := gjson.GetBytes(body, "thinking.type").String()
+	if thinkingType != "enabled" {
+		// If thinking is disabled or not present, just remove the field
+		body, _ = sjson.DeleteBytes(body, "thinking")
+		return body
+	}
+
+	// Get budget_tokens
+	budgetTokens := gjson.GetBytes(body, "thinking.budget_tokens")
+	if budgetTokens.Exists() && budgetTokens.Type == gjson.Number {
+		budget := int(budgetTokens.Int())
+		// Convert to Gemini format
+		body, _ = sjson.SetBytes(body, "generationConfig.thinkingConfig.thinkingBudget", budget)
+		body, _ = sjson.SetBytes(body, "generationConfig.thinkingConfig.includeThoughts", true)
+	}
+
+	// Remove the original Anthropic thinking field
+	body, _ = sjson.DeleteBytes(body, "thinking")
+	return body
+}
+
+func isXAIOBaseURL(baseURL string) bool {
+	if strings.TrimSpace(baseURL) == "" {
+		return false
+	}
+	lower := strings.ToLower(baseURL)
+	return strings.Contains(lower, "x-aio.com") || strings.Contains(lower, "xaio")
 }
 
 type compositeReadCloser struct {
