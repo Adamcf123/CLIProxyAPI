@@ -41,6 +41,8 @@ GEMINI.md
 .agents/*
 .agents/*
 .opencode/*
+.ccb_config/*
+opencode.json
 .bmad/*
 _bmad/*
 _bmad-output/*
@@ -48,3 +50,4 @@ _bmad-output/*
 # macOS
 .DS_Store
 ._*
+.ace-tool/

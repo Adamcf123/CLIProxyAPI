@@ -1,0 +1,110 @@
+managementkey
+adamcf
+apikey for cliproxyAPI sk-dummy
+http://localhost:53355/management.html
+
+\\wsl.localhost\Ubuntu\home\adam\projects\CLIProxyAPI
+./cli-proxy-api
+go build -o cli-proxy-api ./cmd/server
+
+export ANTHROPIC_MODEL=gpt-5.2
+export ANTHROPIC_MODEL=gpt-5.2-codex
+export ANTHROPIC_MODEL=minimax-m2.1
+export ANTHROPIC_MODEL=glm-4.7
+export ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
+export ANTHROPIC_MODEL=claude-opus-4-5-20251101
+
+export ANTHROPIC_MODEL=gemini-3-flash-preview
+export ANTHROPIC_MODEL=gemini-3-pro-preview
+export ANTHROPIC_MODEL=gemini-claude-opus-4-5-thinking
+export ANTHROPIC_MODEL=gemini-claude-sonnet-4-5-thinking
+
+export ANTHROPIC_MODEL=XAIO-G-3-Flash-Preview
+
+curl http://127.0.0.1:53355/
+
+# Provider + 账号名 + 时间窗口 + model 查询示例（codex / fox-codex / 15 分钟窗口）
+curl -sS \
+  -H "X-Management-Key: adamcf" \
+  "http://127.0.0.1:53355/v0/management/usage/providers?provider=codex&account=fox-codex&window=15m" \
+  | jq '.usage.providers[]
+         | select(.provider=="codex")
+         | {provider, account: "fox-codex", window: "15m", model: "gpt-5.2-codex", avg_ops, accounts}'
+
+curl -sS \
+  -H "X-Management-Key: adamcf" \
+  "http://127.0.0.1:53355/v0/management/usage/providers?provider=codex&account=88code-codex&window=15m" \
+  | jq '.usage.providers[]
+         | select(.provider=="codex")
+         | {provider, account: "88code-codex", window: "15m", model: "gpt-5.2-codex", avg_ops, accounts}'
+
+curl -sS \
+  -H "X-Management-Key: adamcf" \
+  "http://127.0.0.1:53355/v0/management/usage/providers?provider=codex&account=88code-codex&window=15m" \
+  | jq '.usage.providers[]
+         | select(.provider=="codex")
+         | {provider, account: "88code-codex", window: "15m", model: "gpt-5.2", avg_ops, accounts}'
+
+curl -sS \
+  -H "X-Management-Key: adamcf" \
+  "http://127.0.0.1:53355/v0/management/usage/providers?provider=zhipu&account=zhipu-glm&window=15m" \
+  | jq '.usage.providers[]
+         | select(.provider=="zhipu")
+         | {provider, account: "zhipu-glm", window: "15m", model: "glm-4.6", avg_ops, accounts}'
+
+# Gemini (Antigravity) OPS 查询示例 (provider=antigravity / 15m window)
+# 注意：gemini-3-pro-preview 目前由 antigravity provider 提供服务
+# account 参数可选，不传则返回所有账号聚合
+curl -sS \
+  -H "X-Management-Key: adamcf" \
+  "http://127.0.0.1:53355/v0/management/usage/providers?provider=antigravity&window=15m" \
+  | jq '.usage.providers[]
+         | select(.provider=="antigravity")
+         | {provider, window: "15m", avg_ops, accounts}'
+
+
+  Claude Code 端点
+
+  # Claude Code 消息端点（非流式）
+  curl -X POST http://127.0.0.1:53355/v1/messages \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-dummy" \
+    -d '{
+      "model": "minimax-m2",
+      "max_tokens": 1024,
+      "messages": [
+        {"role": "user", "content": "写一个 Go 语言的 hello
+  world 程序"}
+      ]
+    }'
+
+  # Claude Code 流式响应
+  curl -X POST http://127.0.0.1:53355/v1/messages \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-dummy" \
+    -d '{
+      "model": "minimax-m2",
+      "max_tokens": 1024,
+      "stream": true,
+      "messages": [
+        {"role": "user", "content": "创建一个简单的 REST API"}
+      ]
+    }'
+
+  智谱 GLM-4.6
+
+  # 非流式对话
+  curl -X POST http://127.0.0.1:53355/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-dummy" \
+    -d '{
+      "model": "glm-4.6",
+      "messages": [
+        {"role": "user", "content": "请写一个简单的 Python
+  函数"}
+      ],
+      "stream": false
+    }'
+
+
+
