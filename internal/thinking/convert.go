@@ -53,19 +53,12 @@ const (
 	ThresholdHigh = 24576
 )
 
-// ConvertBudgetToLevel converts a budget value to the nearest thinking level.
+// ConvertBudgetToLevel converts a budget value to a thinking level.
 //
-// This is a semantic conversion that maps numeric budgets to discrete levels.
-// Uses threshold-based mapping for range conversion.
-//
-// Budget → Level thresholds:
-//   - -1        → auto
-//   - 0         → none
-//   - 1-512     → minimal
-//   - 513-1024  → low
-//   - 1025-8192 → medium
-//   - 8193-24576 → high
-//   - 24577+    → xhigh
+// Budget → Level mapping:
+//   - -1  → auto
+//   - 0   → none
+//   - 1+  → high (all positive budgets)
 //
 // Returns:
 //   - level: The converted thinking level string
@@ -79,16 +72,9 @@ func ConvertBudgetToLevel(budget int) (string, bool) {
 		return string(LevelAuto), true
 	case budget == 0:
 		return string(LevelNone), true
-	case budget <= ThresholdMinimal:
-		return string(LevelMinimal), true
-	case budget <= ThresholdLow:
-		return string(LevelLow), true
-	case budget <= ThresholdMedium:
-		return string(LevelMedium), true
-	case budget <= ThresholdHigh:
-		return string(LevelHigh), true
 	default:
-		return string(LevelXHigh), true
+		// All positive budgets map to high
+		return string(LevelHigh), true
 	}
 }
 
