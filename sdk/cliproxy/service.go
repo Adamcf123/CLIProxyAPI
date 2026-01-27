@@ -851,6 +851,7 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 						if modelID == "" {
 							modelID = m.Name
 						}
+						staticInfo := resolveCompatStaticModelInfo(modelID, m.Name)
 						ms = append(ms, &ModelInfo{
 							ID:          modelID,
 							Object:      "model",
@@ -858,7 +859,8 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 							OwnedBy:     compat.Name,
 							Type:        "openai-compatibility",
 							DisplayName: modelID,
-							UserDefined: true,
+							Thinking:    thinkingSupportFromStatic(staticInfo),
+							UserDefined: staticInfo == nil,
 						})
 					}
 					// Register and return
@@ -892,6 +894,42 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	}
 
 	GlobalModelRegistry().UnregisterClient(a.ID)
+}
+
+func resolveCompatStaticModelInfo(modelID, upstreamName string) *registry.ModelInfo {
+	if info := registry.LookupStaticModelInfo(strings.TrimSpace(modelID)); info != nil {
+		return info
+	}
+	if normalized := normalizeCompatModelID(upstreamName); normalized != "" {
+		if info := registry.LookupStaticModelInfo(normalized); info != nil {
+			return info
+		}
+	}
+	if normalized := normalizeCompatModelID(modelID); normalized != "" {
+		if info := registry.LookupStaticModelInfo(normalized); info != nil {
+			return info
+		}
+	}
+	return nil
+}
+
+func normalizeCompatModelID(raw string) string {
+	modelID := strings.TrimSpace(raw)
+	if modelID == "" {
+		return ""
+	}
+	modelID = strings.TrimPrefix(modelID, "models/")
+	if idx := strings.Index(modelID, "/"); idx != -1 && idx+1 < len(modelID) {
+		modelID = modelID[idx+1:]
+	}
+	return strings.TrimSpace(modelID)
+}
+
+func thinkingSupportFromStatic(info *registry.ModelInfo) *registry.ThinkingSupport {
+	if info == nil || info.Thinking == nil {
+		return nil
+	}
+	return info.Thinking
 }
 
 func (s *Service) resolveConfigClaudeKey(auth *coreauth.Auth) *config.ClaudeKey {

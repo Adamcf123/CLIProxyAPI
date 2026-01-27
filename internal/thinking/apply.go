@@ -112,9 +112,20 @@ func ApplyThinking(body []byte, model string, fromFormat string, toFormat string
 
 	// 3. Model capability check
 	// Unknown models are treated as user-defined so thinking config can still be applied.
-	// The upstream service is responsible for validating the configuration.
+	// If a user-defined model matches a known static model with thinking support, use that
+	// static thinking definition to validate and apply config before sending upstream.
 	if IsUserDefinedModel(modelInfo) {
-		return applyUserDefinedModel(body, modelInfo, fromFormat, providerFormat, suffixResult)
+		staticInfo := registry.LookupStaticModelInfo(baseModel)
+		if staticInfo == nil {
+			if normalized := normalizeModelIDForLookup(baseModel); normalized != "" {
+				staticInfo = registry.LookupStaticModelInfo(normalized)
+			}
+		}
+		if staticInfo != nil && staticInfo.Thinking != nil {
+			modelInfo = staticInfo
+		} else {
+			return applyUserDefinedModel(body, modelInfo, fromFormat, providerFormat, suffixResult)
+		}
 	}
 	if modelInfo.Thinking == nil {
 		config := extractThinkingConfig(body, providerFormat)
@@ -238,6 +249,18 @@ func parseSuffixToConfig(rawSuffix, provider, model string) ThinkingConfig {
 		"raw_suffix": rawSuffix,
 	}).Debug("thinking: unknown suffix format, treating as no config |")
 	return ThinkingConfig{}
+}
+
+func normalizeModelIDForLookup(model string) string {
+	modelID := strings.TrimSpace(model)
+	if modelID == "" {
+		return ""
+	}
+	modelID = strings.TrimPrefix(modelID, "models/")
+	if idx := strings.LastIndex(modelID, "/"); idx != -1 && idx+1 < len(modelID) {
+		modelID = modelID[idx+1:]
+	}
+	return strings.TrimSpace(modelID)
 }
 
 // applyUserDefinedModel applies thinking configuration for user-defined models
