@@ -116,7 +116,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			expectValue: "medium",
 			expectErr:   false,
 		},
-		// Case 7: Budget 8192 → medium
+		// Case 7: Budget 8192 → high
 		{
 			name:        "7",
 			from:        "gemini",
@@ -124,7 +124,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "level-model(8192)",
 			inputJSON:   `{"model":"level-model(8192)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
 			expectField: "reasoning.effort",
-			expectValue: "medium",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 8: Budget 64000 → clamped to high
@@ -170,7 +170,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			expectField: "",
 			expectErr:   false,
 		},
-		// Case 12: Budget 8192 → medium
+		// Case 12: Budget 8192 → high
 		{
 			name:        "12",
 			from:        "claude",
@@ -178,7 +178,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "level-model(8192)",
 			inputJSON:   `{"model":"level-model(8192)","messages":[{"role":"user","content":"hi"}]}`,
 			expectField: "reasoning_effort",
-			expectValue: "medium",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 13: Budget 64000 → clamped to high
@@ -217,7 +217,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 
 		// level-subset-model (Levels=low/high, ZeroAllowed=false, DynamicAllowed=false)
 
-		// Case 16: Budget 8192 → medium → rounded down to low
+		// Case 16: Budget 8192 → high
 		{
 			name:        "16",
 			from:        "gemini",
@@ -225,10 +225,10 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "level-subset-model(8192)",
 			inputJSON:   `{"model":"level-subset-model(8192)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
 			expectField: "reasoning_effort",
-			expectValue: "low",
+			expectValue: "high",
 			expectErr:   false,
 		},
-		// Case 17: Budget 1 → minimal → clamped to low (min supported)
+		// Case 17: Budget 1 → high
 		{
 			name:            "17",
 			from:            "claude",
@@ -236,7 +236,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:           "level-subset-model(1)",
 			inputJSON:       `{"model":"level-subset-model(1)","messages":[{"role":"user","content":"hi"}]}`,
 			expectField:     "generationConfig.thinkingConfig.thinkingLevel",
-			expectValue:     "low",
+			expectValue:     "high",
 			includeThoughts: "true",
 			expectErr:       false,
 		},
@@ -802,7 +802,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			expectField: "",
 			expectErr:   false,
 		},
-		// Case 67: Budget 8192 → passthrough logic → medium
+		// Case 67: Budget 8192 → high
 		{
 			name:        "67",
 			from:        "gemini",
@@ -810,10 +810,10 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "user-defined-model(8192)",
 			inputJSON:   `{"model":"user-defined-model(8192)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
 			expectField: "reasoning_effort",
-			expectValue: "medium",
+			expectValue: "high",
 			expectErr:   false,
 		},
-		// Case 68: Budget 64000 → passthrough logic → xhigh
+		// Case 68: Budget 64000 → high
 		{
 			name:        "68",
 			from:        "gemini",
@@ -821,7 +821,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "user-defined-model(64000)",
 			inputJSON:   `{"model":"user-defined-model(64000)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
 			expectField: "reasoning_effort",
-			expectValue: "xhigh",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 69: Budget 0 → passthrough logic → none
@@ -857,7 +857,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			expectValue: "medium",
 			expectErr:   false,
 		},
-		// Case 72: Budget 8192 → passthrough logic → medium
+		// Case 72: Budget 8192 → high
 		{
 			name:        "72",
 			from:        "claude",
@@ -865,10 +865,10 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "user-defined-model(8192)",
 			inputJSON:   `{"model":"user-defined-model(8192)","messages":[{"role":"user","content":"hi"}]}`,
 			expectField: "reasoning.effort",
-			expectValue: "medium",
+			expectValue: "high",
 			expectErr:   false,
 		},
-		// Case 73: Budget 64000 → passthrough logic → xhigh
+		// Case 73: Budget 64000 → high
 		{
 			name:        "73",
 			from:        "claude",
@@ -876,7 +876,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "user-defined-model(64000)",
 			inputJSON:   `{"model":"user-defined-model(64000)","messages":[{"role":"user","content":"hi"}]}`,
 			expectField: "reasoning.effort",
-			expectValue: "xhigh",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 74: Budget 0 → passthrough logic → none
@@ -1398,7 +1398,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectValue: "medium",
 			expectErr:   false,
 		},
-		// Case 7: thinkingBudget=8192 → medium
+		// Case 7: thinkingBudget=8192 → high
 		{
 			name:        "7",
 			from:        "gemini",
@@ -1406,7 +1406,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "level-model",
 			inputJSON:   `{"model":"level-model","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}`,
 			expectField: "reasoning.effort",
-			expectValue: "medium",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 8: thinkingBudget=64000 → clamped to high
@@ -1452,7 +1452,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectField: "",
 			expectErr:   false,
 		},
-		// Case 12: thinking.budget_tokens=8192 → medium
+		// Case 12: thinking.budget_tokens=8192 → high
 		{
 			name:        "12",
 			from:        "claude",
@@ -1460,7 +1460,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "level-model",
 			inputJSON:   `{"model":"level-model","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":8192}}`,
 			expectField: "reasoning_effort",
-			expectValue: "medium",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 13: thinking.budget_tokens=64000 → clamped to high
@@ -1499,7 +1499,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 
 		// level-subset-model (Levels=low/high, ZeroAllowed=false, DynamicAllowed=false)
 
-		// Case 16: thinkingBudget=8192 → medium → rounded down to low
+		// Case 16: thinkingBudget=8192 → high
 		{
 			name:        "16",
 			from:        "gemini",
@@ -1507,10 +1507,10 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "level-subset-model",
 			inputJSON:   `{"model":"level-subset-model","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}`,
 			expectField: "reasoning_effort",
-			expectValue: "low",
+			expectValue: "high",
 			expectErr:   false,
 		},
-		// Case 17: thinking.budget_tokens=1 → minimal → clamped to low
+		// Case 17: thinking.budget_tokens=1 → high
 		{
 			name:            "17",
 			from:            "claude",
@@ -1518,7 +1518,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:           "level-subset-model",
 			inputJSON:       `{"model":"level-subset-model","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":1}}`,
 			expectField:     "generationConfig.thinkingConfig.thinkingLevel",
-			expectValue:     "low",
+			expectValue:     "high",
 			includeThoughts: "true",
 			expectErr:       false,
 		},
@@ -2084,7 +2084,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectField: "",
 			expectErr:   false,
 		},
-		// Case 67: thinkingBudget=8192 → medium
+		// Case 67: thinkingBudget=8192 → high
 		{
 			name:        "67",
 			from:        "gemini",
@@ -2092,10 +2092,10 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "user-defined-model",
 			inputJSON:   `{"model":"user-defined-model","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}`,
 			expectField: "reasoning_effort",
-			expectValue: "medium",
+			expectValue: "high",
 			expectErr:   false,
 		},
-		// Case 68: thinkingBudget=64000 → xhigh (passthrough)
+		// Case 68: thinkingBudget=64000 → high
 		{
 			name:        "68",
 			from:        "gemini",
@@ -2103,7 +2103,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "user-defined-model",
 			inputJSON:   `{"model":"user-defined-model","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":64000}}}`,
 			expectField: "reasoning_effort",
-			expectValue: "xhigh",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 69: thinkingBudget=0 → none
@@ -2139,7 +2139,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectValue: "medium",
 			expectErr:   false,
 		},
-		// Case 72: thinking.budget_tokens=8192 → medium
+		// Case 72: thinking.budget_tokens=8192 → high
 		{
 			name:        "72",
 			from:        "claude",
@@ -2147,10 +2147,10 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "user-defined-model",
 			inputJSON:   `{"model":"user-defined-model","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":8192}}`,
 			expectField: "reasoning.effort",
-			expectValue: "medium",
+			expectValue: "high",
 			expectErr:   false,
 		},
-		// Case 73: thinking.budget_tokens=64000 → xhigh (passthrough)
+		// Case 73: thinking.budget_tokens=64000 → high
 		{
 			name:        "73",
 			from:        "claude",
@@ -2158,7 +2158,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "user-defined-model",
 			inputJSON:   `{"model":"user-defined-model","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":64000}}`,
 			expectField: "reasoning.effort",
-			expectValue: "xhigh",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 74: thinking.budget_tokens=0 → none
