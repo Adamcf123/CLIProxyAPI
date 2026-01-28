@@ -58,7 +58,7 @@ const (
 // Budget → Level mapping:
 //   - -1  → auto
 //   - 0   → none
-//   - 1+  → medium (all positive budgets)
+//   - 1+  → high (all positive budgets)
 //
 // Returns:
 //   - level: The converted thinking level string
@@ -73,8 +73,8 @@ func ConvertBudgetToLevel(budget int) (string, bool) {
 	case budget == 0:
 		return string(LevelNone), true
 	default:
-		// All positive budgets map to medium
-		return string(LevelMedium), true
+		// All positive budgets map to high
+		return string(LevelHigh), true
 	}
 }
 
