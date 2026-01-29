@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	"github.com/tidwall/gjson"
@@ -85,7 +86,19 @@ func (h *OpenAIResponsesAPIHandler) Responses(c *gin.Context) {
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	if streamResult.Type == gjson.True {
+		state := metricsruntime.NewRequestState(true, gjson.GetBytes(rawJSON, "model").String())
+		state.SetProvider(OpenaiResponse)
+		metricsruntime.AttachRequestState(c, state)
+		stop := metricsruntime.StartLiveDisplay(state)
+		defer stop()
+
 		h.handleStreamingResponse(c, rawJSON)
+
+		state.SetRequestPath(c.Request.URL.Path)
+		state.SetStatusCode(c.Writer.Status())
+		if state.Metrics == nil {
+			metricsruntime.PrintSummary(state)
+		}
 	} else {
 		h.handleNonStreamingResponse(c, rawJSON)
 	}
