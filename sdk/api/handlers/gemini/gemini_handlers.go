@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 )
@@ -174,6 +175,17 @@ func (h *GeminiAPIHandler) GeminiHandler(c *gin.Context) {
 //   - rawJSON: The raw JSON request body containing generation parameters
 func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName string, rawJSON []byte) {
 	alt := h.GetAlt(c)
+	// Attach state early so StartedAt measures from request start, not from
+	// when the first upstream chunk arrives.
+	state := metricsruntime.NewRequestState(true, modelName)
+	state.SetProvider(Gemini)
+	metricsruntime.AttachRequestState(c, state)
+	stop := metricsruntime.StartLiveDisplay(state)
+	defer stop()
+	defer func() {
+		state.SetRequestPath(c.Request.URL.Path)
+		state.SetStatusCode(c.Writer.Status())
+	}()
 
 	// Get the http.Flusher interface to manually flush the response.
 	flusher, ok := c.Writer.(http.Flusher)
@@ -197,7 +209,7 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 		c.Header("Access-Control-Allow-Origin", "*")
 	}
 
-	// Peek at the first chunk
+	// Peek at the first chunk to determine success/failure and headers.
 	for {
 		select {
 		case <-c.Request.Context().Done():
@@ -228,23 +240,14 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 				return
 			}
 
-			// Success! Set headers.
+			// Success! Set headers before any write/flush.
 			if alt == "" {
 				setSSEHeaders()
 			}
 
-			// Write first chunk
-			if alt == "" {
-				_, _ = c.Writer.Write([]byte("data: "))
-				_, _ = c.Writer.Write(chunk)
-				_, _ = c.Writer.Write([]byte("\n\n"))
-			} else {
-				_, _ = c.Writer.Write(chunk)
-			}
-			flusher.Flush()
-
-			// Continue
-			h.forwardGeminiStream(c, flusher, alt, func(err error) { cliCancel(err) }, dataChan, errChan)
+			// Forward the prefetched chunk through ForwardStream to ensure
+			// unified TTFT sampling (first content token triggers MaybeRecordFirstContentToken).
+			h.forwardGeminiStreamWithPrefetched(c, flusher, alt, func(err error) { cliCancel(err) }, dataChan, errChan, chunk)
 			return
 		}
 	}
@@ -283,6 +286,13 @@ func (h *GeminiAPIHandler) handleCountTokens(c *gin.Context, modelName string, r
 //   - rawJSON: The raw JSON request body containing generation parameters and content
 func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName string, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
+	state := metricsruntime.NewRequestState(false, modelName)
+	state.SetProvider(Gemini)
+	metricsruntime.AttachRequestState(c, state)
+	defer func() {
+		state.SetRequestPath(c.Request.URL.Path)
+		state.SetStatusCode(c.Writer.Status())
+	}()
 	alt := h.GetAlt(c)
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 	stopKeepAlive := h.StartNonStreamingKeepAlive(c, cliCtx)
@@ -298,6 +308,10 @@ func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName strin
 }
 
 func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flusher, alt string, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	h.forwardGeminiStreamWithPrefetched(c, flusher, alt, cancel, data, errs, nil)
+}
+
+func (h *GeminiAPIHandler) forwardGeminiStreamWithPrefetched(c *gin.Context, flusher http.Flusher, alt string, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, prefetched []byte) {
 	var keepAliveInterval *time.Duration
 	if alt != "" {
 		disabled := time.Duration(0)
@@ -306,6 +320,7 @@ func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flus
 
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
 		KeepAliveInterval: keepAliveInterval,
+		PrefetchedChunk:   prefetched,
 		WriteChunk: func(chunk []byte) {
 			if alt == "" {
 				_, _ = c.Writer.Write([]byte("data: "))
