@@ -4,6 +4,7 @@
 package metrics
 
 import (
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,8 @@ type Persistence interface {
 // TPSCollector manages the collection and aggregation of TPS metrics.
 // It maintains separate sliding windows for each MetricKey (provider/model/streaming combination).
 type TPSCollector struct {
+	mu sync.RWMutex
+
 	// windows holds the sliding window for each grouping key
 	windows map[MetricKey]*SlidingWindow
 
@@ -132,13 +135,8 @@ func (c *TPSCollector) CompleteRequest(m *RequestMetrics, outputTokens int) erro
 		}
 	}
 
-	// Store in window
-	window := c.windows[m.Key]
-	if window == nil {
-		// This shouldn't happen as StartRequest creates the window
-		window = c.getOrCreateWindow(m.Key)
-	}
-
+	// Store in window (map access must be concurrency-safe)
+	window := c.getOrCreateWindow(m.Key)
 	window.Add(*m)
 
 	// Persist if configured
@@ -154,8 +152,11 @@ func (c *TPSCollector) CompleteRequest(m *RequestMetrics, outputTokens int) erro
 // It calculates min, max, avg, median, p95, and p99 for TPS, TTFT, and TPOT.
 // Returns WindowStats and true if the key exists and has data, otherwise returns zero WindowStats and false.
 func (c *TPSCollector) GetWindowStats(key MetricKey) (WindowStats, bool) {
-	window, exists := c.windows[key]
-	if !exists || window.Len() == 0 {
+	c.mu.RLock()
+	window := c.windows[key]
+	c.mu.RUnlock()
+
+	if window == nil || window.Len() == 0 {
 		return WindowStats{Key: key}, false
 	}
 
@@ -167,32 +168,48 @@ func (c *TPSCollector) GetWindowStats(key MetricKey) (WindowStats, bool) {
 // GetAllKeys returns all metric keys that have recorded data.
 // The returned slice is empty if no requests have been completed.
 func (c *TPSCollector) GetAllKeys() []MetricKey {
+	c.mu.RLock()
 	keys := make([]MetricKey, 0, len(c.windows))
-	for key := range c.windows {
-		window := c.windows[key]
+	for key, window := range c.windows {
 		if window != nil && window.Len() > 0 {
 			keys = append(keys, key)
 		}
 	}
+	c.mu.RUnlock()
 	return keys
 }
 
 // getOrCreateWindow gets an existing window or creates a new one for the given key.
-// This is an internal method that is not safe for concurrent use from multiple goroutines.
-// The caller must hold appropriate locks if needed.
+// It is safe for concurrent use; it only protects the windows map access.
+// The returned SlidingWindow has its own locking and can be used concurrently.
 func (c *TPSCollector) getOrCreateWindow(key MetricKey) *SlidingWindow {
-	window, exists := c.windows[key]
-	if !exists {
-		window = NewSlidingWindow()
-		c.windows[key] = window
+	c.mu.RLock()
+	window := c.windows[key]
+	c.mu.RUnlock()
+	if window != nil {
+		return window
+	}
 
-		// Try to load persisted data if persistence is configured
-		if c.persistence != nil {
-			if loaded, err := c.persistence.Load(key); err == nil && len(loaded) > 0 {
-				// Restore window state from persisted data
-				window.RestoreFrom(loaded)
-			}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Re-check under write lock in case another goroutine created it.
+	window = c.windows[key]
+	if window != nil {
+		return window
+	}
+
+	window = NewSlidingWindow()
+	c.windows[key] = window
+
+	// Try to load persisted data if persistence is configured.
+	// Note: persistence is expected to be read-only here; we keep the map locked to
+	// ensure only one window is created/restored per key.
+	if c.persistence != nil {
+		if loaded, err := c.persistence.Load(key); err == nil && len(loaded) > 0 {
+			window.RestoreFrom(loaded)
 		}
 	}
+
 	return window
 }
