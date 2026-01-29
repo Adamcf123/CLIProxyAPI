@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	"github.com/tidwall/gjson"
@@ -85,8 +86,24 @@ func (h *OpenAIResponsesAPIHandler) Responses(c *gin.Context) {
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	if streamResult.Type == gjson.True {
+		state := metricsruntime.NewRequestState(true, gjson.GetBytes(rawJSON, "model").String())
+		state.SetProvider(OpenaiResponse)
+		metricsruntime.AttachRequestState(c, state)
+		stop := metricsruntime.StartLiveDisplay(state)
+		defer stop()
+
 		h.handleStreamingResponse(c, rawJSON)
+
+		state.SetRequestPath(c.Request.URL.Path)
+		state.SetStatusCode(c.Writer.Status())
 	} else {
+		state := metricsruntime.NewRequestState(false, gjson.GetBytes(rawJSON, "model").String())
+		state.SetProvider(OpenaiResponse)
+		metricsruntime.AttachRequestState(c, state)
+		defer func() {
+			state.SetRequestPath(c.Request.URL.Path)
+			state.SetStatusCode(c.Writer.Status())
+		}()
 		h.handleNonStreamingResponse(c, rawJSON)
 	}
 
@@ -228,24 +245,19 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 			// Success! Set headers.
 			setSSEHeaders()
 			handlers.WriteUpstreamHeaders(c.Writer.Header(), upstreamHeaders)
-
-			// Write first chunk logic (matching forwardResponsesStream)
-			if bytes.HasPrefix(chunk, []byte("event:")) {
-				_, _ = c.Writer.Write([]byte("\n"))
-			}
-			_, _ = c.Writer.Write(chunk)
-			_, _ = c.Writer.Write([]byte("\n"))
-			flusher.Flush()
-
-			// Continue
-			h.forwardResponsesStream(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan)
+			h.forwardResponsesStreamWithPrefetched(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan, chunk)
 			return
 		}
 	}
 }
 
 func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	h.forwardResponsesStreamWithPrefetched(c, flusher, cancel, data, errs, nil)
+}
+
+func (h *OpenAIResponsesAPIHandler) forwardResponsesStreamWithPrefetched(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, prefetched []byte) {
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
+		PrefetchedChunk: prefetched,
 		WriteChunk: func(chunk []byte) {
 			if bytes.HasPrefix(chunk, []byte("event:")) {
 				_, _ = c.Writer.Write([]byte("\n"))
@@ -261,6 +273,9 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 			if errMsg.StatusCode > 0 {
 				status = errMsg.StatusCode
 			}
+			// Best-effort: set status before writing terminal SSE error payload.
+			// If headers were already committed by prior writes/flushes, clients may still see 200.
+			c.Status(status)
 			errText := http.StatusText(status)
 			if errMsg.Error != nil && errMsg.Error.Error() != "" {
 				errText = errMsg.Error.Error()

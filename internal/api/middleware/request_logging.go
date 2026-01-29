@@ -52,6 +52,8 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 
 		// Create response writer wrapper
 		wrapper := NewResponseWriterWrapper(c.Writer, logger, requestInfo)
+		// Provide Gin context so the wrapper can record streaming token timing.
+		wrapper.ginCtx = c
 		if !loggerEnabled {
 			wrapper.logOnErrorOnly = true
 		}

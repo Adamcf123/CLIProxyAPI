@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -60,5 +62,149 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	}
 	if record.Latency > 3*time.Second {
 		t.Fatalf("latency = %v, want <= 3s", record.Latency)
+	}
+}
+
+func TestUsageReporter_Publish_SkipsAllZeroTokensWhenNotFailed(t *testing.T) {
+	ctx := context.Background()
+	reporter := newUsageReporter(ctx, "provider", "model", nil)
+
+	prev := publishUsageRecord
+	defer func() { publishUsageRecord = prev }()
+
+	calls := 0
+	publishUsageRecord = func(ctx context.Context, record usage.Record) {
+		calls++
+	}
+
+	reporter.publish(ctx, usage.Detail{})
+	if calls != 0 {
+		t.Fatalf("expected no publish calls, got %d", calls)
+	}
+}
+
+func TestUsageReporter_EnsurePublished_EmitsOnce(t *testing.T) {
+	ctx := context.Background()
+	reporter := newUsageReporter(ctx, "provider", "model", nil)
+
+	prev := publishUsageRecord
+	defer func() { publishUsageRecord = prev }()
+
+	calls := 0
+	var got usage.Record
+	publishUsageRecord = func(ctx context.Context, record usage.Record) {
+		calls++
+		got = record
+	}
+
+	reporter.ensurePublished(ctx)
+	reporter.ensurePublished(ctx)
+	reporter.ensurePublished(ctx)
+
+	if calls != 1 {
+		t.Fatalf("expected 1 publish call, got %d", calls)
+	}
+	if got.Failed {
+		t.Fatalf("expected Failed=false, got true")
+	}
+	if got.Detail != (usage.Detail{}) {
+		t.Fatalf("expected empty Detail, got %#v", got.Detail)
+	}
+}
+
+func TestUsageReporter_PublishThenFinalize_EmitsOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	reporter := newUsageReporter(ctx, "provider", "model", nil)
+
+	prev := publishUsageRecord
+	defer func() { publishUsageRecord = prev }()
+
+	calls := 0
+	publishUsageRecord = func(ctx context.Context, record usage.Record) {
+		calls++
+	}
+
+	reporter.publish(ctx, usage.Detail{OutputTokens: 1, TotalTokens: 1})
+	var err error
+	reporter.finalize(ctx, &err)
+
+	if calls != 1 {
+		t.Fatalf("expected 1 publish call, got %d", calls)
+	}
+}
+
+func TestUsageReporter_Finalize_PublishesFailureWhenErrSet(t *testing.T) {
+	ctx := context.Background()
+	reporter := newUsageReporter(ctx, "provider", "model", nil)
+
+	prev := publishUsageRecord
+	defer func() { publishUsageRecord = prev }()
+
+	calls := 0
+	var got usage.Record
+	publishUsageRecord = func(ctx context.Context, record usage.Record) {
+		calls++
+		got = record
+	}
+
+	err := errors.New("boom")
+	reporter.finalize(ctx, &err)
+
+	if calls != 1 {
+		t.Fatalf("expected 1 publish call, got %d", calls)
+	}
+	if !got.Failed {
+		t.Fatalf("expected Failed=true, got false")
+	}
+}
+
+func TestUsageReporter_PublishFailureThenEnsurePublished_EmitsFailureOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	reporter := newUsageReporter(ctx, "provider", "model", nil)
+
+	prev := publishUsageRecord
+	defer func() { publishUsageRecord = prev }()
+
+	calls := 0
+	var got usage.Record
+	publishUsageRecord = func(ctx context.Context, record usage.Record) {
+		calls++
+		got = record
+	}
+
+	reporter.publishFailure(ctx)
+	reporter.ensurePublished(ctx)
+
+	if calls != 1 {
+		t.Fatalf("expected 1 publish call, got %d", calls)
+	}
+	if !got.Failed {
+		t.Fatalf("expected Failed=true, got false")
+	}
+}
+
+func TestUsageReporter_PublishFailureThenFinalize_EmitsFailureOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	reporter := newUsageReporter(ctx, "provider", "model", nil)
+
+	prev := publishUsageRecord
+	defer func() { publishUsageRecord = prev }()
+
+	calls := 0
+	var got usage.Record
+	publishUsageRecord = func(ctx context.Context, record usage.Record) {
+		calls++
+		got = record
+	}
+
+	reporter.publishFailure(ctx)
+	var err error
+	reporter.finalize(ctx, &err)
+
+	if calls != 1 {
+		t.Fatalf("expected 1 publish call, got %d", calls)
+	}
+	if !got.Failed {
+		t.Fatalf("expected Failed=true, got false")
 	}
 }

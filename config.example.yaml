@@ -45,6 +45,11 @@ pprof:
   enable: false
   addr: "127.0.0.1:8316"
 
+# Metrics progress display (stderr)
+# When true, disable live per-second progress lines ("metrics tracking=...") even when stderr is a TTY.
+# This does not affect the end-of-request single-line metrics_summary JSON output.
+metrics-progress-disabled: false
+
 # When true, disable high-overhead HTTP middleware features to reduce per-request memory usage under high concurrency.
 commercial-mode: false
 

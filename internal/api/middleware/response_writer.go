@@ -5,13 +5,17 @@ package middleware
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 )
 
 const requestBodyOverrideContextKey = "REQUEST_BODY_OVERRIDE"
@@ -32,6 +36,7 @@ type ResponseWriterWrapper struct {
 	gin.ResponseWriter
 	body                *bytes.Buffer              // body is a buffer to store the response body for non-streaming responses.
 	isStreaming         bool                       // isStreaming indicates whether the response is a streaming type (e.g., text/event-stream).
+	ginCtx              *gin.Context               // ginCtx enables streaming token timing capture.
 	streamWriter        logging.StreamingLogWriter // streamWriter is a writer for handling streaming log entries.
 	chunkChannel        chan []byte                // chunkChannel is a channel for asynchronously passing response chunks to the logger.
 	streamDone          chan struct{}              // streamDone signals when the streaming goroutine completes.
@@ -41,6 +46,8 @@ type ResponseWriterWrapper struct {
 	headers             map[string][]string        // headers stores the response headers.
 	logOnErrorOnly      bool                       // logOnErrorOnly enables logging only when an error response is detected.
 	firstChunkTimestamp time.Time                  // firstChunkTimestamp captures TTFB for streaming responses.
+	writeErrMu          sync.Mutex
+	writeErr            error
 }
 
 // NewResponseWriterWrapper creates and initializes a new ResponseWriterWrapper.
@@ -75,6 +82,11 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 
 	// CRITICAL: Write to client first (zero latency)
 	n, err := w.ResponseWriter.Write(data)
+	w.noteWriteError(err)
+
+	// Best-effort: for streaming responses, record first content token timing/chunk count.
+	// This is gated to only do work for the first few chunks to avoid per-chunk overhead.
+	w.maybeRecordStreamingContentToken(data)
 
 	// THEN: Handle logging based on response type
 	if w.isStreaming && w.chunkChannel != nil {
@@ -123,6 +135,12 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 
 	// CRITICAL: Write to client first (zero latency)
 	n, err := w.ResponseWriter.WriteString(data)
+	w.noteWriteError(err)
+
+	// See Write(): capture streaming token timing/chunk count.
+	if w.isStreaming {
+		w.maybeRecordStreamingContentToken([]byte(data))
+	}
 
 	// THEN: Capture for logging
 	if w.isStreaming && w.chunkChannel != nil {
@@ -156,8 +174,15 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	contentType := w.ResponseWriter.Header().Get("Content-Type")
 	w.isStreaming = w.detectStreaming(contentType)
 
+	// Best-effort: make status code visible to metricsruntime earlier than Finalize().
+	if w.ginCtx != nil {
+		if state, ok := metricsruntime.GetRequestState(w.ginCtx); ok && state != nil {
+			state.SetStatusCode(statusCode)
+		}
+	}
+
 	// If streaming, initialize streaming log writer
-	if w.isStreaming && w.logger.IsEnabled() {
+	if w.isStreaming && w.logger != nil && w.logger.IsEnabled() {
 		streamWriter, err := w.logger.LogStreamingRequest(
 			w.requestInfo.URL,
 			w.requestInfo.Method,
@@ -181,6 +206,43 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 
 	// Call original WriteHeader
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *ResponseWriterWrapper) maybeRecordStreamingContentToken(chunk []byte) {
+	if w == nil {
+		return
+	}
+	if !w.isStreaming {
+		return
+	}
+	if w.ginCtx == nil {
+		return
+	}
+	if len(chunk) == 0 {
+		return
+	}
+
+	state, ok := metricsruntime.GetRequestState(w.ginCtx)
+	if !ok || state == nil {
+		return
+	}
+
+	// Gate heavy parsing: once we have first token time and at least 2 content chunks,
+	// we have enough evidence for downstream rate computation.
+	snap := state.Snapshot()
+	if snap.FirstContentTokenAt != nil && snap.ContentTokenChunks >= 2 {
+		return
+	}
+
+	// Ensure StatusCode is not left at 0 for streaming paths where usage publish can
+	// occur before Finalize(). We prefer the underlying writer status; fall back to 200.
+	status := w.ResponseWriter.Status()
+	if status == 0 {
+		status = http.StatusOK
+	}
+	state.SetStatusCode(status)
+
+	metricsruntime.MaybeRecordFirstContentToken(w.ginCtx, chunk, time.Now().UTC())
 }
 
 // ensureHeadersCaptured is a helper function to make sure response headers are captured.
@@ -255,10 +317,6 @@ func (w *ResponseWriterWrapper) processStreamingChunks(done chan struct{}) {
 // For non-streaming responses, it logs the complete request and response details,
 // including any API-specific request/response data stored in the Gin context.
 func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
-	if w.logger == nil {
-		return nil
-	}
-
 	finalStatusCode := w.statusCode
 	if finalStatusCode == 0 {
 		if statusWriter, ok := w.ResponseWriter.(interface{ Status() int }); ok {
@@ -266,6 +324,32 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 		} else {
 			finalStatusCode = 200
 		}
+	}
+
+	// Outcome correction for cancel/disconnect and timeouts.
+	//
+	// This happens regardless of logging enablement. Logging is a best-effort side path,
+	// but canceled persistence semantics must be stable.
+	if c != nil {
+		if state, ok := metricsruntime.GetRequestState(c); ok && state != nil {
+			state.SetStatusCode(finalStatusCode)
+			snap := state.Snapshot()
+			if !snap.IsFailure() {
+				var reqErr error
+				if c.Request != nil {
+					reqErr = c.Request.Context().Err()
+				}
+				if errors.Is(reqErr, context.DeadlineExceeded) {
+					state.SetLastError(reqErr)
+				} else if w.getWriteError() != nil {
+					state.MarkClientCanceled()
+				}
+			}
+		}
+	}
+
+	if w.logger == nil {
+		return nil
 	}
 
 	var slicesAPIResponseError []*interfaces.ErrorMessage
@@ -313,6 +397,24 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 	}
 
 	return w.logRequest(w.extractRequestBody(c), finalStatusCode, w.cloneHeaders(), w.body.Bytes(), w.extractAPIRequest(c), w.extractAPIResponse(c), w.extractAPIResponseTimestamp(c), slicesAPIResponseError, forceLog)
+}
+
+func (w *ResponseWriterWrapper) noteWriteError(err error) {
+	if err == nil {
+		return
+	}
+	w.writeErrMu.Lock()
+	if w.writeErr == nil {
+		w.writeErr = err
+	}
+	w.writeErrMu.Unlock()
+}
+
+func (w *ResponseWriterWrapper) getWriteError() error {
+	w.writeErrMu.Lock()
+	err := w.writeErr
+	w.writeErrMu.Unlock()
+	return err
 }
 
 func (w *ResponseWriterWrapper) cloneHeaders() map[string][]string {

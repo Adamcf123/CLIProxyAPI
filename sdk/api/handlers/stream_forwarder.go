@@ -1,12 +1,49 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 )
+
+func maybeSetStreamingTerminalLastError(c *gin.Context, errMsg *interfaces.ErrorMessage) {
+	if c == nil || errMsg == nil {
+		return
+	}
+	state, ok := metricsruntime.GetRequestState(c)
+	if !ok || state == nil {
+		return
+	}
+	if state.Snapshot().LastError != "" {
+		return
+	}
+
+	if errMsg.Error != nil {
+		if msg := strings.TrimSpace(errMsg.Error.Error()); msg != "" {
+			state.SetLastError(errors.New(msg))
+			return
+		}
+	}
+
+	status := errMsg.StatusCode
+	if status <= 0 {
+		status = http.StatusInternalServerError
+	}
+	if status >= 400 {
+		if msg := strings.TrimSpace(http.StatusText(status)); msg != "" {
+			state.SetLastError(errors.New(msg))
+			return
+		}
+	}
+
+	state.SetLastError(errors.New("streaming terminal error"))
+}
 
 type StreamForwardOptions struct {
 	// KeepAliveInterval overrides the configured streaming keep-alive interval.
@@ -27,6 +64,12 @@ type StreamForwardOptions struct {
 	// WriteKeepAlive optionally writes a keep-alive heartbeat. It should not flush.
 	// When nil, a standard SSE comment heartbeat is used.
 	WriteKeepAlive func()
+
+	// PrefetchedChunk holds the first chunk that was already read from the upstream
+	// before entering ForwardStream. When set, this chunk will be written first (before
+	// reading from data channel) and will trigger TTFT recording. This ensures the first
+	// payload chunk goes through the same write/flush path as subsequent chunks.
+	PrefetchedChunk []byte
 }
 
 func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, opts StreamForwardOptions) {
@@ -61,11 +104,44 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 		keepAliveC = keepAlive.C
 	}
 
+	// Write prefetched chunk first (if any) to ensure TTFT is recorded consistently.
+	// This ensures the first payload chunk goes through the same write/flush path.
+	if len(opts.PrefetchedChunk) > 0 {
+		writeChunk(opts.PrefetchedChunk)
+		flusher.Flush()
+		metricsruntime.MaybeRecordFirstContentToken(c, opts.PrefetchedChunk, time.Now())
+	}
+
 	var terminalErr *interfaces.ErrorMessage
 	for {
 		select {
 		case <-c.Request.Context().Done():
-			cancel(c.Request.Context().Err())
+			// Hard rule: upstream explicit errors (terminal streaming errors) must win over
+			// conservative canceled. Probe errs channel before marking canceled.
+			select {
+			case errMsg, ok := <-errs:
+				if ok && errMsg != nil {
+					maybeSetStreamingTerminalLastError(c, errMsg)
+					cancel(errMsg.Error)
+					return
+				}
+			default:
+			}
+
+			ctxErr := c.Request.Context().Err()
+			if errors.Is(ctxErr, context.DeadlineExceeded) {
+				if state, ok := metricsruntime.GetRequestState(c); ok && state != nil {
+					state.SetLastError(ctxErr)
+				}
+				cancel(ctxErr)
+				return
+			}
+			if errors.Is(ctxErr, context.Canceled) {
+				if state, ok := metricsruntime.GetRequestState(c); ok && state != nil {
+					state.MarkClientCanceled()
+				}
+			}
+			cancel(ctxErr)
 			return
 		case chunk, ok := <-data:
 			if !ok {
@@ -80,6 +156,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 					}
 				}
 				if terminalErr != nil {
+					maybeSetStreamingTerminalLastError(c, terminalErr)
 					if opts.WriteTerminalError != nil {
 						opts.WriteTerminalError(terminalErr)
 					}
@@ -96,12 +173,14 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 			}
 			writeChunk(chunk)
 			flusher.Flush()
+			metricsruntime.MaybeRecordFirstContentToken(c, chunk, time.Now())
 		case errMsg, ok := <-errs:
 			if !ok {
 				continue
 			}
 			if errMsg != nil {
 				terminalErr = errMsg
+				maybeSetStreamingTerminalLastError(c, errMsg)
 				if opts.WriteTerminalError != nil {
 					opts.WriteTerminalError(errMsg)
 					flusher.Flush()
