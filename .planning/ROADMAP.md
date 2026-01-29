@@ -56,12 +56,13 @@ Plans:
   3. 指标收集不影响流式响应的延迟和吞吐量
   4. 跨不同 provider（OpenAI、Gemini、Claude）的指标收集正常工作
 
-**Plans**: 3 plans in 2 waves
+**Plans**: 4 plans in 2 waves (including 1 gap closure)
 
 Plans:
-- [ ] 02-01-PLAN.md — 打牢采集基础（TTFT hook + collector 并发安全 + 单请求 state）
-- [ ] 02-02-PLAN.md — 流式中每秒显示 + 结束后指标汇总（stderr）
-- [ ] 02-03-PLAN.md — JSONL 按日落盘（logs/metrics-YYYY-MM-DD.jsonl）
+- [x] 02-01-PLAN.md — 打牢采集基础（TTFT hook + collector 并发安全 + 单请求 state）
+- [x] 02-02-PLAN.md — 流式中每秒显示 + 结束后指标汇总（stderr）
+- [x] 02-03-PLAN.md — JSONL 按日落盘（logs/metrics-YYYY-MM-DD.jsonl）
+- [x] 02-04-PLAN.md — 修复 TTFT 采样缺口（OpenAI/Gemini/Claude 首 chunk 路径收敛）
 
 ### Phase 3: Persistence
 
@@ -113,6 +114,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Metrics Foundation | 4/4 | Complete | 2025-01-29 |
-| 2. Metrics Collection | 0/3 | Not started | - |
+| 2. Metrics Collection | 4/4 | Complete | 2026-01-29 |
 | 3. Persistence | 0/3 | Not started | - |
 | 4. Query API | 0/3 | Not started | - |
