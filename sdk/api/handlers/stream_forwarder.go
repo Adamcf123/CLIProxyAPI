@@ -28,6 +28,12 @@ type StreamForwardOptions struct {
 	// WriteKeepAlive optionally writes a keep-alive heartbeat. It should not flush.
 	// When nil, a standard SSE comment heartbeat is used.
 	WriteKeepAlive func()
+
+	// PrefetchedChunk holds the first chunk that was already read from the upstream
+	// before entering ForwardStream. When set, this chunk will be written first (before
+	// reading from data channel) and will trigger TTFT recording. This ensures the first
+	// payload chunk goes through the same write/flush path as subsequent chunks.
+	PrefetchedChunk []byte
 }
 
 func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, opts StreamForwardOptions) {
@@ -60,6 +66,14 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 		keepAlive = time.NewTicker(keepAliveInterval)
 		defer keepAlive.Stop()
 		keepAliveC = keepAlive.C
+	}
+
+	// Write prefetched chunk first (if any) to ensure TTFT is recorded consistently.
+	// This ensures the first payload chunk goes through the same write/flush path.
+	if len(opts.PrefetchedChunk) > 0 {
+		writeChunk(opts.PrefetchedChunk)
+		flusher.Flush()
+		metricsruntime.MaybeRecordFirstToken(c, opts.PrefetchedChunk, time.Now())
 	}
 
 	var terminalErr *interfaces.ErrorMessage
