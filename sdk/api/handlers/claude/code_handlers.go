@@ -234,7 +234,9 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 		c.Header("Access-Control-Allow-Origin", "*")
 	}
 
-	// Peek at the first chunk to determine success or failure before setting headers
+	// Peek at the first chunk to determine success or failure before setting headers.
+	// State must be attached BEFORE any write/flush to ensure TTFT captures
+	// the real first token time.
 	for {
 		select {
 		case <-c.Request.Context().Done():
@@ -263,23 +265,19 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 				return
 			}
 
-			// Success! Set headers now.
+			// Success! Set headers and attach state BEFORE any write/flush.
 			setSSEHeaders()
 
-			// Write the first chunk
-			if len(chunk) > 0 {
-				_, _ = c.Writer.Write(chunk)
-				flusher.Flush()
-			}
-
+			// Attach state BEFORE writing any chunks to ensure TTFT is accurate.
 			state := metricsruntime.NewRequestState(true, modelName)
 			state.SetProvider(Claude)
 			metricsruntime.AttachRequestState(c, state)
 			stop := metricsruntime.StartLiveDisplay(state)
 			defer stop()
 
-			// Continue streaming the rest
-			h.forwardClaudeStream(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan)
+			// Forward the prefetched chunk through ForwardStream to ensure
+			// unified TTFT sampling (first chunk triggers MaybeRecordFirstToken).
+			h.forwardClaudeStreamWithPrefetched(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan, chunk)
 
 			state.SetRequestPath(c.Request.URL.Path)
 			state.SetStatusCode(c.Writer.Status())
@@ -292,7 +290,12 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 }
 
 func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	h.forwardClaudeStreamWithPrefetched(c, flusher, cancel, data, errs, nil)
+}
+
+func (h *ClaudeCodeAPIHandler) forwardClaudeStreamWithPrefetched(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, prefetched []byte) {
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
+		PrefetchedChunk: prefetched,
 		WriteChunk: func(chunk []byte) {
 			if len(chunk) == 0 {
 				return
