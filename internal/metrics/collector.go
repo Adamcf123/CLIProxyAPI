@@ -5,6 +5,8 @@ package metrics
 
 import (
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Persistence defines the interface for persisting and loading sliding window data.
@@ -43,10 +45,11 @@ func (c *TPSCollector) StartRequest(key MetricKey) *RequestMetrics {
 	// Ensure window exists for this key (created lazily on first access)
 	_ = c.getOrCreateWindow(key)
 
-	// Create new metrics entry
+	// Create new metrics entry with unique tracking ID
 	metrics := &RequestMetrics{
-		Key:       key,
-		StartTime: time.Now(),
+		TrackingID: uuid.New().String(),
+		Key:        key,
+		StartTime:  time.Now(),
 	}
 
 	return metrics
