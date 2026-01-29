@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	log "github.com/sirupsen/logrus"
@@ -160,7 +161,20 @@ func (h *GeminiCLIAPIHandler) handleInternalStreamGenerateContent(c *gin.Context
 
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 	dataChan, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
+
+	state := metricsruntime.NewRequestState(true, modelName)
+	state.SetProvider(GeminiCLI)
+	metricsruntime.AttachRequestState(c, state)
+	stop := metricsruntime.StartLiveDisplay(state)
+	defer stop()
+
 	h.forwardCLIStream(c, flusher, "", func(err error) { cliCancel(err) }, dataChan, errChan)
+
+	state.SetRequestPath(c.Request.URL.Path)
+	state.SetStatusCode(c.Writer.Status())
+	if state.Metrics == nil {
+		metricsruntime.PrintSummary(state)
+	}
 	return
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 )
@@ -243,8 +244,20 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 			}
 			flusher.Flush()
 
+			state := metricsruntime.NewRequestState(true, modelName)
+			state.SetProvider(Gemini)
+			metricsruntime.AttachRequestState(c, state)
+			stop := metricsruntime.StartLiveDisplay(state)
+			defer stop()
+
 			// Continue
 			h.forwardGeminiStream(c, flusher, alt, func(err error) { cliCancel(err) }, dataChan, errChan)
+
+			state.SetRequestPath(c.Request.URL.Path)
+			state.SetStatusCode(c.Writer.Status())
+			if state.Metrics == nil {
+				metricsruntime.PrintSummary(state)
+			}
 			return
 		}
 	}
