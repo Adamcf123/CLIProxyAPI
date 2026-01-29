@@ -10,29 +10,29 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 ## Current Position
 
 Phase: 2 of 4 (Metrics Collection)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-01-29 — Completed 02-02-PLAN.md (live streaming display)
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-01-29 — Completed 02-03-PLAN.md (structured metrics logging)
 
-Progress: [██████████░░] 86%
+Progress: [████████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 8 min
-- Total execution time: 0.8 hours
+- Total plans completed: 7
+- Average duration: 9 min
+- Total execution time: 1.0 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-metrics-foundation | 4 | 4 | 4 min |
-| 02-metrics-collection | 2 | 3 | 16 min |
+| 02-metrics-collection | 3 | 3 | 14 min |
 
 **Recent Trend:**
-- Last 5 plans: 4 min, 4 min, 4 min, 12 min, 19 min
-- Trend: ↑ (Phase 2 plans are taking longer)
+- Last 5 plans: 4 min, 12 min, 19 min, 12 min
+- Trend: → (stabilized)
 
 *Updated after each plan completion*
 
@@ -56,8 +56,11 @@ Recent decisions affecting current work:
 **From Phase 02-metrics-collection:**
 - TTFT anchor is recorded at the first flushed non-keep-alive payload chunk in ForwardStream (not at keep-alive flush)
 - TPSCollector protects windows map with RWMutex; SlidingWindow retains its own internal locking
-- Live metrics progress + summary are stderr-only; TTY gates line overwrite (\\r + ANSI clear)
+- Live metrics progress + summary are stderr-only; TTY gates line overwrite (\r + ANSI clear)
 - Summary is emitted as a single searchable line (metrics_summary JSON); missing usage keeps tokens/throughput as null
+- Structured metrics logging writes to logs/metrics-YYYY-MM-DD.jsonl with daily rotation
+- MetricsPlugin computes TPS/TTFT/TPOT from usage records and persists to JSONL asynchronously
+- Log enqueue is non-blocking; queue-full drops line to ensure zero impact on request path
 
 ### Pending Todos
 
@@ -73,6 +76,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-29 16:48Z
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-01-29 16:41Z
+Stopped at: Completed 02-03-PLAN.md (structured metrics logging)
 Resume file: None
