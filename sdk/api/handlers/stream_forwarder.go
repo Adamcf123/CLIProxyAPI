@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 )
 
 type StreamForwardOptions struct {
@@ -96,6 +97,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 			}
 			writeChunk(chunk)
 			flusher.Flush()
+			metricsruntime.MaybeRecordFirstToken(c, chunk, time.Now())
 		case errMsg, ok := <-errs:
 			if !ok {
 				continue
