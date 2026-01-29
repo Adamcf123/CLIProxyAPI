@@ -51,22 +51,22 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| METR-01 | TBD | Pending |
-| METR-02 | TBD | Pending |
-| METR-03 | TBD | Pending |
-| METR-04 | TBD | Pending |
-| DISP-01 | TBD | Pending |
-| DISP-02 | TBD | Pending |
-| STOR-01 | TBD | Pending |
-| STOR-02 | TBD | Pending |
-| STOR-03 | TBD | Pending |
-| STOR-04 | TBD | Pending |
+| METR-01 | Phase 1 | Pending |
+| METR-02 | Phase 1 | Pending |
+| METR-03 | Phase 1 | Pending |
+| METR-04 | Phase 1 | Pending |
+| DISP-01 | Phase 2 | Pending |
+| DISP-02 | Phase 2 | Pending |
+| STOR-01 | Phase 3 | Pending |
+| STOR-02 | Phase 4 | Pending |
+| STOR-03 | Phase 4 | Pending |
+| STOR-04 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 10 total
-- Mapped to phases: 0
-- Unmapped: 10 ⚠️
+- Mapped to phases: 10 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2025-01-29*
-*Last updated: 2025-01-29 after initial definition*
+*Last updated: 2025-01-29 after roadmap creation*
