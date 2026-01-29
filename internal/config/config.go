@@ -84,6 +84,11 @@ type Config struct {
 	// WebsocketAuth enables or disables authentication for the WebSocket API.
 	WebsocketAuth bool `yaml:"ws-auth" json:"ws-auth"`
 
+	// MetricsProgressDisabled force-disables the live per-second metrics progress overwrite output
+	// ("metrics tracking=..." lines) even when stderr is a TTY.
+	//
+	// This does not affect the end-of-request single-line metrics_summary JSON evidence output.
+	MetricsProgressDisabled bool `yaml:"metrics-progress-disabled" json:"metrics-progress-disabled"`
 	// GeminiKey defines Gemini API key configurations with optional routing overrides.
 	GeminiKey []GeminiKey `yaml:"gemini-api-key" json:"gemini-api-key"`
 

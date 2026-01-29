@@ -64,6 +64,29 @@ CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-fo
 
 请参见 [MANAGEMENT_API_CN.md](https://help.router-for.me/cn/management/api)
 
+## Metrics (TPS/TTFT/TPOT)
+
+CLIProxyAPI 会将请求指标（TPS/TTFT/TPOT）持久化到本地 SQLite 数据库文件：`logs/metrics.db`。
+
+SQLite 查询示例（只读）：
+
+```bash
+sqlite3 logs/metrics.db \
+  "SELECT created_at, provider, model, streaming, tps, ttft, tpot, status_code FROM metrics ORDER BY created_at DESC LIMIT 10;"
+```
+
+Management Query API 示例（`GET /v0/management/metrics`，需要请求头 `X-Management-Key`）：
+
+```bash
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:${PORT}/v0/management/metrics?limit=10"
+```
+
+说明：
+- `mode=percentiles` 会为每个指标返回 `sample_count`；当 `sample_count=0` 时，对应分位数为 `null`。
+- `mode=buckets` 会保留空 bucket 以保持时间轴对齐，并为每个指标返回 `*_sample_count`；当 `*_sample_count=0` 时，对应均值为 `null`。
+
 ## Amp CLI 支持
 
 CLIProxyAPI 已内置对 [Amp CLI](https://ampcode.com) 和 Amp IDE 扩展的支持，可让你使用自己的 Google/ChatGPT/Claude OAuth 订阅来配合 Amp 编码工具：

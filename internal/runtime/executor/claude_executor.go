@@ -96,6 +96,12 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		return resp, statusErr{code: http.StatusNotImplemented, msg: "/responses/compact not supported"}
 	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	requestedModelFallback := strings.TrimSpace(gjson.GetBytes(req.Payload, "model").String())
+	if requestedModelFallback == "" {
+		requestedModelFallback = req.Model
+	}
+	requestedModel := payloadRequestedModel(opts, requestedModelFallback)
+	requestedBaseModel := thinking.ParseSuffix(requestedModel).ModelName
 
 	apiKey, baseURL := claudeCreds(auth)
 	if baseURL == "" {
@@ -103,7 +109,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
-	defer reporter.trackFailure(ctx, &err)
+	defer reporter.finalize(ctx, &err)
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("claude")
 	// Use streaming translation to preserve function calling, except for claude.
@@ -126,11 +132,17 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// based on client type and configuration.
 	body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
 
-	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
+
+	// Kimi Claude-compatible /v1/messages has stricter validation when thinking is enabled:
+	// - assistant tool_use history must include a non-empty thinking block
+	// - assistant tool_use messages must include non-empty reasoning_content
+	// OpenCode may emit tool_use messages without these fields.
+	body = ensureKimiToolCallThinkingBlock(requestedBaseModel, body)
+	body = ensureKimiToolCallReasoningContent(requestedBaseModel, body)
 
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
@@ -264,6 +276,12 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		return nil, statusErr{code: http.StatusNotImplemented, msg: "/responses/compact not supported"}
 	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	requestedModelFallback := strings.TrimSpace(gjson.GetBytes(req.Payload, "model").String())
+	if requestedModelFallback == "" {
+		requestedModelFallback = req.Model
+	}
+	requestedModel := payloadRequestedModel(opts, requestedModelFallback)
+	requestedBaseModel := thinking.ParseSuffix(requestedModel).ModelName
 
 	apiKey, baseURL := claudeCreds(auth)
 	if baseURL == "" {
@@ -292,11 +310,17 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	// based on client type and configuration.
 	body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
 
-	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
+
+	// Kimi Claude-compatible /v1/messages has stricter validation when thinking is enabled:
+	// - assistant tool_use history must include a non-empty thinking block
+	// - assistant tool_use messages must include non-empty reasoning_content
+	// OpenCode may emit tool_use messages without these fields.
+	body = ensureKimiToolCallThinkingBlock(requestedBaseModel, body)
+	body = ensureKimiToolCallReasoningContent(requestedBaseModel, body)
 
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
@@ -386,6 +410,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
 		defer close(out)
+		defer reporter.ensurePublished(ctx)
 		defer func() {
 			if errClose := decodedBody.Close(); errClose != nil {
 				log.Errorf("response body close error: %v", errClose)
@@ -635,6 +660,146 @@ func disableThinkingIfToolChoiceForced(body []byte) []byte {
 			body, _ = sjson.DeleteBytes(body, "output_config")
 		}
 	}
+	return body
+}
+
+func ensureKimiToolCallThinkingBlock(baseModel string, body []byte) []byte {
+	if baseModel != "kimi-for-coding" {
+		return body
+	}
+	if gjson.GetBytes(body, "thinking.type").String() != "enabled" {
+		return body
+	}
+
+	// Kimi requires a non-empty thinking content block on assistant tool_use messages.
+	// Empirically, empty/whitespace thinking is treated as missing.
+	const placeholder = "."
+
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.Exists() || !messages.IsArray() {
+		return body
+	}
+
+	messages.ForEach(func(index, msg gjson.Result) bool {
+		if msg.Get("role").String() != "assistant" {
+			return true
+		}
+		content := msg.Get("content")
+		if !content.Exists() || !content.IsArray() {
+			return true
+		}
+		hasToolUse := false
+		hasValidThinking := false
+		thinkingIndex := int64(-1)
+		content.ForEach(func(partIndex, part gjson.Result) bool {
+			switch part.Get("type").String() {
+			case "tool_use":
+				hasToolUse = true
+			case "thinking":
+				thinkingIndex = partIndex.Int()
+				if strings.TrimSpace(part.Get("thinking").String()) != "" {
+					hasValidThinking = true
+				}
+			}
+			return true
+		})
+		if !hasToolUse {
+			return true
+		}
+		if hasValidThinking {
+			return true
+		}
+
+		// If a thinking block exists but is empty/whitespace, patch it in-place.
+		if thinkingIndex >= 0 {
+			path := fmt.Sprintf("messages.%d.content.%d.thinking", index.Int(), thinkingIndex)
+			updated, err := sjson.SetBytes(body, path, placeholder)
+			if err == nil {
+				body = updated
+			}
+			return true
+		}
+
+		// Otherwise, prepend a minimal thinking block before tool_use.
+		var parts []any
+		if err := json.Unmarshal([]byte(content.Raw), &parts); err != nil {
+			return true
+		}
+		parts = append([]any{map[string]any{"type": "thinking", "thinking": placeholder}}, parts...)
+		patchedRaw, err := json.Marshal(parts)
+		if err != nil {
+			return true
+		}
+		path := fmt.Sprintf("messages.%d.content", index.Int())
+		updated, err := sjson.SetRawBytes(body, path, patchedRaw)
+		if err == nil {
+			body = updated
+		}
+		return true
+	})
+
+	return body
+}
+
+func ensureKimiToolCallReasoningContent(baseModel string, body []byte) []byte {
+	if baseModel != "kimi-for-coding" {
+		return body
+	}
+	if gjson.GetBytes(body, "thinking.type").String() != "enabled" {
+		return body
+	}
+
+	// Kimi validates reasoning_content for assistant tool calls when thinking is enabled.
+	// Empirically, empty/whitespace values are treated as missing.
+	const placeholder = "."
+
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.Exists() || !messages.IsArray() {
+		return body
+	}
+
+	messages.ForEach(func(index, msg gjson.Result) bool {
+		if msg.Get("role").String() != "assistant" {
+			return true
+		}
+		content := msg.Get("content")
+		if !content.Exists() || !content.IsArray() {
+			return true
+		}
+		hasToolUse := false
+		content.ForEach(func(_, part gjson.Result) bool {
+			if part.Get("type").String() == "tool_use" {
+				hasToolUse = true
+				return false
+			}
+			return true
+		})
+		if !hasToolUse {
+			return true
+		}
+
+		rc := msg.Get("reasoning_content")
+		needsPatch := false
+		if !rc.Exists() {
+			needsPatch = true
+		} else if rc.Type != gjson.String {
+			// Treat null or unexpected types as invalid.
+			needsPatch = true
+		} else if strings.TrimSpace(rc.String()) == "" {
+			needsPatch = true
+		}
+		if !needsPatch {
+			return true
+		}
+
+		path := fmt.Sprintf("messages.%d.reasoning_content", index.Int())
+		updated, err := sjson.SetBytes(body, path, placeholder)
+		if err == nil {
+			body = updated
+		}
+		return true
+	})
+
 	return body
 }
 

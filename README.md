@@ -64,6 +64,58 @@ CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)
 
+## Metrics (TPS/TTFT/TPOT)
+
+CLIProxyAPI persists request metrics (TPS/TTFT/TPOT) into a local SQLite database file: `logs/metrics.db`.
+
+SQLite query example (read-only):
+
+```bash
+sqlite3 logs/metrics.db \
+  "SELECT created_at, provider, model, streaming, tps, ttft, tpot, status_code FROM metrics ORDER BY created_at DESC LIMIT 10;"
+```
+
+Management Query API example (`GET /v0/management/metrics`, requires `X-Management-Key`):
+
+```bash
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:${PORT}/v0/management/metrics?mode=percentiles"
+```
+
+Notes:
+- `mode=percentiles` includes per-metric `sample_count` fields; when `sample_count=0`, the corresponding percentiles are `null`.
+- `mode=buckets` keeps empty buckets for alignment and includes per-metric `*_sample_count`; when `*_sample_count=0`, the corresponding averages are `null`.
+
+### Best-effort Metrics Persistence Contract
+
+Metrics persistence is **best-effort** by design: the request path must never block on SQLite writes.
+As a result, individual metric rows may be dropped under specific conditions.
+
+**Droppable scenarios (stable enum codes):**
+
+- `queue_full`: the internal writer queue is full (enqueue is non-blocking)
+- `writer_not_started`: the writer goroutine is not started yet (startup race / misconfiguration)
+- `insert_failure`: SQLite insert failed (I/O error, DB closed, schema issues, etc.)
+
+**Observability contract (`/v0/management/metrics`):**
+
+- `meta.persistence` is emitted **only when degraded**. When not degraded, the response JSON MUST NOT include `meta.persistence`.
+- When emitted, `meta.persistence` contains a **minimal safe field set**:
+  - `degraded` (boolean)
+  - `dropped_total` (process-lifetime counter)
+  - `last_drop_at` (RFC3339 UTC timestamp)
+  - `last_drop_reason` (optional; one of the enum codes above)
+
+**Quiet-period recovery:**
+
+- Degraded state is computed from `last_drop_at` using a fixed quiet period of **5m**.
+- If no new drops occur for 5 minutes, degraded automatically clears and `meta.persistence` disappears from responses.
+
+**Security boundary:**
+
+- `meta.persistence` MUST NOT include request ID lists, raw SQL errors, filesystem paths, or user input.
+
 ## Amp CLI Support
 
 CLIProxyAPI includes integrated support for [Amp CLI](https://ampcode.com) and Amp IDE extensions, enabling you to use your Google/ChatGPT/Claude OAuth subscriptions with Amp's coding tools:

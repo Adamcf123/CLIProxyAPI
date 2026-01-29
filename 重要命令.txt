@@ -1,108 +1,206 @@
-managementkey
-adamcf
-apikey for cliproxyAPI sk-dummy
+# management key (DO NOT commit real value)
+export MANAGEMENT_KEY="<MANAGEMENT_KEY>"
+
+# API key for CLIProxyAPI (placeholder)
+export API_KEY="sk-dummy"
 http://localhost:53355/management.html
 
 \\wsl.localhost\Ubuntu\home\adam\projects\CLIProxyAPI
 ./cli-proxy-api
 go build -o cli-proxy-api ./cmd/server
 
-export ANTHROPIC_MODEL=gpt-5.2
-export ANTHROPIC_MODEL=gpt-5.2-codex
-export ANTHROPIC_MODEL=minimax-m2.1
+export ANTHROPIC_MODEL=gpt-5.4
+export ANTHROPIC_MODEL=gpt-5.3-codex
+export ANTHROPIC_MODEL=minimax-m2.5
 export ANTHROPIC_MODEL=glm-4.7
+export ANTHROPIC_MODEL=glm-4.7-no-think
 export ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 export ANTHROPIC_MODEL=claude-opus-4-5-20251101
 
 export ANTHROPIC_MODEL=gemini-3-flash-preview
-export ANTHROPIC_MODEL=gemini-3-pro-preview
 
 export ANTHROPIC_MODEL=kimi-for-coding
+export ANTHROPIC_MODEL=kimi-k2.5
 
 curl http://127.0.0.1:53355/
 
-# Provider + 账号名 + 时间窗口 + model 查询示例（codex / fox-codex / 15 分钟窗口）
+
+# Management API（需要 X-Management-Key: ${MANAGEMENT_KEY}；路由前缀固定 /v0/management）
+
+# Usage 统计快照（内存聚合；不支持旧的 /usage/providers 过滤路由）
 curl -sS \
-  -H "X-Management-Key: adamcf" \
-  "http://127.0.0.1:53355/v0/management/usage/providers?provider=codex&account=fox-codex&window=15m" \
-  | jq '.usage.providers[]
-         | select(.provider=="codex")
-         | {provider, account: "fox-codex", window: "15m", model: "gpt-5.2-codex", avg_ops, accounts}'
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/usage" \
+  | jq '.usage | {total_requests, success_count, failure_count, total_tokens}'
 
+# Usage 明细：按 API 标识 -> 按 model 聚合（仅示例：列出每个 API 下有哪些 models）
 curl -sS \
-  -H "X-Management-Key: adamcf" \
-  "http://127.0.0.1:53355/v0/management/usage/providers?provider=codex&account=88code-codex&window=15m" \
-  | jq '.usage.providers[]
-         | select(.provider=="codex")
-         | {provider, account: "88code-codex", window: "15m", model: "gpt-5.2-codex", avg_ops, accounts}'
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/usage" \
+  | jq -r '.usage.apis
+           | to_entries[]
+           | [.key, (.value.models | keys | join(","))]
+           | @tsv'
 
+# 导出/导入 usage（用于备份/迁移）
 curl -sS \
-  -H "X-Management-Key: adamcf" \
-  "http://127.0.0.1:53355/v0/management/usage/providers?provider=codex&account=88code-codex&window=15m" \
-  | jq '.usage.providers[]
-         | select(.provider=="codex")
-         | {provider, account: "88code-codex", window: "15m", model: "gpt-5.2", avg_ops, accounts}'
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/usage/export" \
+  | jq '.'
 
+# 查看当前 config.yaml（服务端读取的配置）
 curl -sS \
-  -H "X-Management-Key: adamcf" \
-  "http://127.0.0.1:53355/v0/management/usage/providers?provider=zhipu&account=zhipu-glm&window=15m" \
-  | jq '.usage.providers[]
-         | select(.provider=="zhipu")
-         | {provider, account: "zhipu-glm", window: "15m", model: "glm-4.6", avg_ops, accounts}'
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/config.yaml"
 
-# Gemini (Antigravity) OPS 查询示例 (provider=antigravity / 15m window)
-# 注意：gemini-3-pro-preview 目前由 antigravity provider 提供服务
-# account 参数可选，不传则返回所有账号聚合
+# Request error logs（列表/下载）
 curl -sS \
-  -H "X-Management-Key: adamcf" \
-  "http://127.0.0.1:53355/v0/management/usage/providers?provider=antigravity&window=15m" \
-  | jq '.usage.providers[]
-         | select(.provider=="antigravity")
-         | {provider, window: "15m", avg_ops, accounts}'
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/request-error-logs" \
+  | jq '.'
+
+# curl -sS \
+#   -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+#   "http://127.0.0.1:53355/v0/management/request-error-logs/<name>" \
+#   -o "logs/<name>"
 
 
-  Claude Code 端点
+# API 端点自检（需要 Authorization: Bearer sk-dummy）
 
-  # Claude Code 消息端点（非流式）
-  curl -X POST http://127.0.0.1:53355/v1/messages \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-dummy" \
-    -d '{
-      "model": "minimax-m2",
-      "max_tokens": 1024,
-      "messages": [
-        {"role": "user", "content": "写一个 Go 语言的 hello
-  world 程序"}
-      ]
-    }'
+# OpenAI 兼容：模型列表
+curl -sS \
+  -H "Authorization: Bearer ${API_KEY}" \
+  "http://127.0.0.1:53355/v1/models" \
+  | jq '.'
 
-  # Claude Code 流式响应
-  curl -X POST http://127.0.0.1:53355/v1/messages \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-dummy" \
-    -d '{
-      "model": "minimax-m2",
-      "max_tokens": 1024,
-      "stream": true,
-      "messages": [
-        {"role": "user", "content": "创建一个简单的 REST API"}
-      ]
-    }'
+# Gemini v1beta：模型列表（如果没有配置 gemini/vertex/antigravity 的凭据，可能只有静态数据或为空）
+curl -sS \
+  -H "Authorization: Bearer ${API_KEY}" \
+  "http://127.0.0.1:53355/v1beta/models" \
+  | jq '.'
 
-  智谱 GLM-4.6
 
-  # 非流式对话
-  curl -X POST http://127.0.0.1:53355/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-dummy" \
-    -d '{
-      "model": "glm-4.6",
-      "messages": [
-        {"role": "user", "content": "请写一个简单的 Python
-  函数"}
-      ],
-      "stream": false
-    }'
+# Phase 02 指标输出（仅当 stderr 为 TTY 时显示流式进度行；非 TTY 仅在结束时输出单行 metrics_summary JSON）
+# 可在 config.yaml 中配置全局禁用 TTY 下的实时 progress 覆盖行：metrics-progress-disabled: true
+# 可通过环境变量强制禁用实时 progress 覆盖行（即使 stderr 为 TTY）：CLIPROXY_METRICS_PROGRESS_DISABLED=1
+# 示例：CLIPROXY_METRICS_PROGRESS_DISABLED=1 ./cli-proxy-api
+# 注意：该 env 只影响实时 progress，不影响请求结束的单行 metrics_summary JSON
+# Phase 03 持久化：写入 logs/metrics.db（SQLite）
+sqlite3 "logs/metrics.db" "SELECT request_id, provider, model, tps_gen, ttft, tpot, created_at FROM metrics ORDER BY created_at DESC LIMIT 5;"
+
+# metrics.db 基本分布（用于确认 provider/model/streaming 的实际取值）
+sqlite3 -header -column logs/metrics.db "SELECT provider, COUNT(*) AS n FROM metrics GROUP BY provider ORDER BY n DESC;"
+sqlite3 -header -column logs/metrics.db "SELECT model, COUNT(*) AS n FROM metrics GROUP BY model ORDER BY n DESC;"
+sqlite3 -header -column logs/metrics.db "SELECT streaming, COUNT(*) AS n FROM metrics GROUP BY streaming ORDER BY n DESC;"
+
+# 近 N 分钟窗口汇总（直接查 SQLite；按需替换 provider/model）
+# 说明：tps_gen/tpot/ttft 可能为 NULL；请同时看 *_sample_count 以避免误读。
+sqlite3 -header -column logs/metrics.db "
+WITH base AS (
+  SELECT *
+  FROM metrics
+  WHERE created_at >= datetime('now','-10 minutes')
+    AND created_at <  datetime('now')
+    AND provider = 'claude'
+    AND model = 'kimi-for-coding'
+    AND streaming = 1
+)
+SELECT
+  COUNT(*) AS total_requests,
+  SUM(CASE WHEN status_code = 499 THEN 1 ELSE 0 END) AS canceled_requests,
+  SUM(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN 1 ELSE 0 END) AS success_requests,
+  SUM(CASE WHEN status_code = 499 THEN 0 WHEN status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN 0 ELSE 1 END) AS failure_requests,
+  COUNT(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') AND tps_gen IS NOT NULL THEN 1 END) AS tps_gen_samples_success,
+  AVG(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN tps_gen END) AS tps_gen_avg_success,
+  COUNT(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') AND output_tokens IS NOT NULL AND duration_ms IS NOT NULL AND duration_ms > 0 THEN 1 END) AS tps_e2e_samples_success,
+  AVG(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') AND output_tokens IS NOT NULL AND duration_ms IS NOT NULL AND duration_ms > 0 THEN (CAST(output_tokens AS REAL) / (CAST(duration_ms AS REAL) / 1000.0)) END) AS tps_e2e_avg_success
+FROM base;"
+
+# output_tokens 很多但 TTFT 仍为 NULL（用于排查 streaming 首内容识别）
+sqlite3 -header -column logs/metrics.db "
+SELECT request_id, provider, model, output_tokens, duration_ms, ttft, tps_gen, tpot, created_at
+FROM metrics
+WHERE streaming=1
+  AND output_tokens IS NOT NULL AND output_tokens >= 16
+  AND ttft IS NULL
+ORDER BY created_at DESC
+LIMIT 30;"
+
+# 历史指标查询：GET /v0/management/metrics（从 logs/metrics.db 读取）
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/metrics?mode=percentiles" \
+  | jq '.'
+
+# 历史指标查询：buckets（按时间窗口）
+# 示例：近 10 分钟，每分钟一个 bucket（可替换 bucket=5m/15m/1h；并可加 provider/model/streaming 过滤）
+TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+FROM=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/metrics?mode=buckets&bucket=1m&from=${FROM}&to=${TO}&provider=claude&model=kimi-for-coding&streaming=true" \
+  | jq '.'
+
+# buckets 输出做窗口内加权平均（避免大量 NULL 时误读）
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/metrics?mode=buckets&bucket=1m&from=${FROM}&to=${TO}&provider=claude&model=kimi-for-coding&streaming=true" \
+  | jq '(.success[0].buckets) as $b
+        | {
+            total_requests: ([ $b[] | .count ] | add // 0),
+            tps_sample_count: ([ $b[] | .metrics.tps_sample_count ] | add // 0),
+            tps_avg_weighted: (([ $b[] | select(.metrics.tps_avg != null) | (.metrics.tps_avg * .metrics.tps_sample_count) ] | add // 0)
+                              / (([ $b[] | .metrics.tps_sample_count ] | add // 0) | if .==0 then 1 else . end)),
+            tps_e2e_sample_count: ([ $b[] | .metrics.tps_e2e_sample_count ] | add // 0),
+            tps_e2e_avg_weighted: (([ $b[] | select(.metrics.tps_e2e_avg != null) | (.metrics.tps_e2e_avg * .metrics.tps_e2e_sample_count) ] | add // 0)
+                                  / (([ $b[] | .metrics.tps_e2e_sample_count ] | add // 0) | if .==0 then 1 else . end))
+          }'
+
+
+# OpenAI 兼容：Chat Completions（流式）
+curl -sS -N \
+  -X POST "http://127.0.0.1:53355/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  --data-binary '{"model":"gpt-5.2","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"Say hi in one short sentence."}]}'
+
+
+# Claude Code：消息端点（非流式；model 使用 config.yaml 里已配置的别名）
+curl -sS \
+  -X POST "http://127.0.0.1:53355/v1/messages" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  --data-binary '{"model":"minimax-m2.1","max_tokens":256,"messages":[{"role":"user","content":"写一个 Go 语言的 hello world 程序"}]}'
+
+# Claude Code：消息端点（流式；model 使用 config.yaml 里已配置的别名）
+curl -sS -N \
+  -X POST "http://127.0.0.1:53355/v1/messages" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  --data-binary '{"model":"minimax-m2.1","max_tokens":256,"stream":true,"messages":[{"role":"user","content":"创建一个简单的 REST API"}]}'
+
+
+# 智谱 GLM-4.7（走 OpenAI 兼容 /v1/chat/completions；model 使用 config.yaml 里已配置的别名）
+curl -sS \
+  -X POST "http://127.0.0.1:53355/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  --data-binary '{"model":"glm-4.7","messages":[{"role":"user","content":"请写一个简单的 Python 函数"}],"stream":false}'
+
+
+# Gemini（当前 config.yaml 未配置 gemini-api-key，因此优先走 /v1/messages 使用已配置的模型别名）
+curl -sS -N \
+  -X POST "http://127.0.0.1:53355/v1/messages" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  --data-binary '{"model":"gemini-3-flash-preview","max_tokens":256,"stream":true,"messages":[{"role":"user","content":"Say hi in one short sentence."}]}'
+
+# Gemini v1beta：流式（仅当配置了 gemini-api-key / vertex / OAuth auth files；否则可能报 unknown provider for model ...）
+# curl -sS -N \
+#   -X POST "http://127.0.0.1:53355/v1beta/models/gemini-3-pro-preview:streamGenerateContent" \
+#   -H "Content-Type: application/json" \
+#   -H "Authorization: Bearer ${API_KEY}" \
+#   --data-binary '{"contents":[{"role":"user","parts":[{"text":"Say hi in one short sentence."}]}],"generationConfig":{"maxOutputTokens":128}}'
 
 
 

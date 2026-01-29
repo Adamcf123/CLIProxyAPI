@@ -82,7 +82,8 @@ func unwrapGeminiResponseRoot(root gjson.Result) gjson.Result {
 }
 
 func emitEvent(event string, payload string) string {
-	return fmt.Sprintf("event: %s\ndata: %s", event, payload)
+	// SSE event frames must end with a blank line.
+	return fmt.Sprintf("event: %s\ndata: %s\n\n", event, payload)
 }
 
 // ConvertGeminiResponseToOpenAIResponses converts Gemini SSE chunks into OpenAI Responses SSE events.
