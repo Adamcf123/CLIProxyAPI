@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	log "github.com/sirupsen/logrus"
@@ -79,6 +80,14 @@ func (h *ClaudeCodeAPIHandler) ClaudeMessages(c *gin.Context) {
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	if !streamResult.Exists() || streamResult.Type == gjson.False {
+		modelName := gjson.GetBytes(rawJSON, "model").String()
+		state := metricsruntime.NewRequestState(false, modelName)
+		state.SetProvider(Claude)
+		metricsruntime.AttachRequestState(c, state)
+		defer func() {
+			state.SetRequestPath(c.Request.URL.Path)
+			state.SetStatusCode(c.Writer.Status())
+		}()
 		h.handleNonStreamingResponse(c, rawJSON)
 	} else {
 		h.handleStreamingResponse(c, rawJSON)
@@ -220,6 +229,17 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 	}
 
 	modelName := gjson.GetBytes(rawJSON, "model").String()
+	// Attach state early so StartedAt measures from request start, not from
+	// when the first upstream chunk arrives.
+	state := metricsruntime.NewRequestState(true, modelName)
+	state.SetProvider(Claude)
+	metricsruntime.AttachRequestState(c, state)
+	stop := metricsruntime.StartLiveDisplay(state)
+	defer stop()
+	defer func() {
+		state.SetRequestPath(c.Request.URL.Path)
+		state.SetStatusCode(c.Writer.Status())
+	}()
 
 	// Create a cancellable context for the backend client request
 	// This allows proper cleanup and cancellation of ongoing requests
@@ -233,7 +253,7 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 		c.Header("Access-Control-Allow-Origin", "*")
 	}
 
-	// Peek at the first chunk to determine success or failure before setting headers
+	// Peek at the first chunk to determine success or failure before setting headers.
 	for {
 		select {
 		case <-c.Request.Context().Done():
@@ -262,24 +282,24 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 				return
 			}
 
-			// Success! Set headers now.
+			// Success! Set headers before any write/flush.
 			setSSEHeaders()
 
-			// Write the first chunk
-			if len(chunk) > 0 {
-				_, _ = c.Writer.Write(chunk)
-				flusher.Flush()
-			}
-
-			// Continue streaming the rest
-			h.forwardClaudeStream(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan)
+			// Forward the prefetched chunk through ForwardStream to ensure
+			// unified TTFT sampling (first content token triggers MaybeRecordFirstContentToken).
+			h.forwardClaudeStreamWithPrefetched(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan, chunk)
 			return
 		}
 	}
 }
 
 func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	h.forwardClaudeStreamWithPrefetched(c, flusher, cancel, data, errs, nil)
+}
+
+func (h *ClaudeCodeAPIHandler) forwardClaudeStreamWithPrefetched(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, prefetched []byte) {
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
+		PrefetchedChunk: prefetched,
 		WriteChunk: func(chunk []byte) {
 			if len(chunk) == 0 {
 				return
