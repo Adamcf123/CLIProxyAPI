@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 ## Current Position
 
 Phase: 1 of 4 (Metrics Foundation)
-Plan: 1 of 3 in current phase
-Status: In progress
-Last activity: 2026-01-29 — Completed 01-01 core metrics types and collector
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-01-29 — Completed 01-03 sliding window aggregation
 
-Progress: [██░░░░░░░░] 33%
+Progress: [████████░░░░] 67%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 3 min
-- Total execution time: 0.1 hours
+- Total plans completed: 3
+- Average duration: 4 min
+- Total execution time: 0.2 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01-metrics-foundation | 1 | 3 | 3 min |
+| 01-metrics-foundation | 3 | 3 | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: 3 min
+- Last 5 plans: 4 min
 - Trend: -
 
 *Updated after each plan completion*
@@ -45,6 +45,9 @@ Recent decisions affecting current work:
 **From Phase 01-metrics-foundation:**
 - Fixed 100-request sliding window size for each provider/model combination
 - Separate aggregation for streaming vs non-streaming requests
+- Extracted SlidingWindow into standalone module with public API (Add, GetAll, Len, GetStats, RestoreFromMetrics)
+- Used RWMutex for thread-safe concurrent access to sliding window
+- Implemented percentile calculation with linear interpolation for p95/p99
 
 ### Pending Todos
 
@@ -61,5 +64,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-29
-Stopped at: Completed 01-01-PLAN.md (metrics types and collector)
+Stopped at: Completed 01-03-PLAN.md (sliding window aggregation)
 Resume file: None
