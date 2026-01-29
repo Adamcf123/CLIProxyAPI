@@ -12,8 +12,8 @@
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Metrics Foundation** - 建立核心指标计算逻辑和数据结构
-- [ ] **Phase 2: Metrics Collection** - 集成指标收集到流式响应处理
+- [x] **Phase 1: Metrics Foundation** - 建立核心指标计算逻辑和数据结构
+- [x] **Phase 2: Metrics Collection** - 集成指标收集到流式响应处理
 - [ ] **Phase 3: Persistence** - SQLite 持久化存储
 - [ ] **Phase 4: Query API** - 历史指标查询和分析接口
 
@@ -37,10 +37,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 4 plans in 2 waves
 
 Plans:
-- [ ] 01-01-PLAN.md — 设计和实现 TPSCollector 核心结构和数据类型
-- [ ] 01-02-PLAN.md — 实现 TPS、TTFT、TPOT 计算逻辑和单元测试
-- [ ] 01-03-PLAN.md — 实现滑动窗口聚合和百分位统计
-- [ ] 01-04-PLAN.md — 完善 TPSCollector 集成滑动窗口和计算功能
+- [x] 01-01-PLAN.md — 设计和实现 TPSCollector 核心结构和数据类型
+- [x] 01-02-PLAN.md — 实现 TPS、TTFT、TPOT 计算逻辑和单元测试
+- [x] 01-03-PLAN.md — 实现滑动窗口聚合和百分位统计
+- [x] 01-04-PLAN.md — 完善 TPSCollector 集成滑动窗口和计算功能
 
 ### Phase 2: Metrics Collection
 
@@ -78,12 +78,12 @@ Plans:
   3. 数据库写入不影响响应性能
   4. 数据库文件正确初始化和迁移
 
-**Plans**: TBD
+**Plans**: 3 plans in 3 waves
 
 Plans:
-- [ ] 03-01: 设计和实现 SQLite schema
-- [ ] 03-02: 实现指标数据持久化逻辑
-- [ ] 03-03: 实现数据库初始化和迁移
+- [ ] 03-01-PLAN.md — SQLite schema + migrations wiring
+- [ ] 03-02-PLAN.md — Async SQLite writer + MetricsPlugin integration
+- [ ] 03-03-PLAN.md — Retention cleanup + disable JSONL legacy
 
 ### Phase 4: Query API
 
@@ -115,5 +115,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Metrics Foundation | 4/4 | Complete | 2025-01-29 |
 | 2. Metrics Collection | 4/4 | Complete | 2026-01-29 |
-| 3. Persistence | 0/3 | Not started | - |
+| 3. Persistence | 0/3 | In progress | - |
 | 4. Query API | 0/3 | Not started | - |
