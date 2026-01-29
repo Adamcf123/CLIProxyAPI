@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 )
@@ -197,7 +198,9 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 		c.Header("Access-Control-Allow-Origin", "*")
 	}
 
-	// Peek at the first chunk
+	// Peek at the first chunk to determine success/failure and headers.
+	// State must be attached BEFORE any write/flush to ensure TTFT captures
+	// the real first token time.
 	for {
 		select {
 		case <-c.Request.Context().Done():
@@ -228,23 +231,27 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 				return
 			}
 
-			// Success! Set headers.
+			// Success! Set headers and attach state BEFORE any write/flush.
 			if alt == "" {
 				setSSEHeaders()
 			}
 
-			// Write first chunk
-			if alt == "" {
-				_, _ = c.Writer.Write([]byte("data: "))
-				_, _ = c.Writer.Write(chunk)
-				_, _ = c.Writer.Write([]byte("\n\n"))
-			} else {
-				_, _ = c.Writer.Write(chunk)
-			}
-			flusher.Flush()
+			// Attach state BEFORE writing any chunks to ensure TTFT is accurate.
+			state := metricsruntime.NewRequestState(true, modelName)
+			state.SetProvider(Gemini)
+			metricsruntime.AttachRequestState(c, state)
+			stop := metricsruntime.StartLiveDisplay(state)
+			defer stop()
 
-			// Continue
-			h.forwardGeminiStream(c, flusher, alt, func(err error) { cliCancel(err) }, dataChan, errChan)
+			// Forward the prefetched chunk through ForwardStream to ensure
+			// unified TTFT sampling (first chunk triggers MaybeRecordFirstToken).
+			h.forwardGeminiStreamWithPrefetched(c, flusher, alt, func(err error) { cliCancel(err) }, dataChan, errChan, chunk)
+
+			state.SetRequestPath(c.Request.URL.Path)
+			state.SetStatusCode(c.Writer.Status())
+			if state.Metrics == nil {
+				metricsruntime.PrintSummary(state)
+			}
 			return
 		}
 	}
@@ -298,6 +305,10 @@ func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName strin
 }
 
 func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flusher, alt string, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	h.forwardGeminiStreamWithPrefetched(c, flusher, alt, cancel, data, errs, nil)
+}
+
+func (h *GeminiAPIHandler) forwardGeminiStreamWithPrefetched(c *gin.Context, flusher http.Flusher, alt string, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, prefetched []byte) {
 	var keepAliveInterval *time.Duration
 	if alt != "" {
 		disabled := time.Duration(0)
@@ -306,6 +317,7 @@ func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flus
 
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
 		KeepAliveInterval: keepAliveInterval,
+		PrefetchedChunk:   prefetched,
 		WriteChunk: func(chunk []byte) {
 			if alt == "" {
 				_, _ = c.Writer.Write([]byte("data: "))
