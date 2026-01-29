@@ -460,7 +460,7 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 	cliCancel()
 }
 
-// handleStreamingResponse handles streaming responses for Gemini models.
+// handleStreamingResponse handles streaming responses for OpenAI models.
 // It establishes a streaming connection with the backend service and forwards
 // the response chunks to the client in real-time using Server-Sent Events.
 //
@@ -491,7 +491,9 @@ func (h *OpenAIAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON []byt
 		c.Header("Access-Control-Allow-Origin", "*")
 	}
 
-	// Peek at the first chunk to determine success or failure before setting headers
+	// Peek at the first chunk to determine success or failure before setting headers.
+	// The prefetched chunk will be passed to ForwardStream to ensure TTFT is recorded
+	// through the unified write/flush path.
 	for {
 		select {
 		case <-c.Request.Context().Done():
@@ -521,14 +523,10 @@ func (h *OpenAIAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON []byt
 				return
 			}
 
-			// Success! Commit to streaming headers.
+			// Success! Commit to streaming headers and forward the prefetched chunk
+			// through ForwardStream to ensure unified TTFT sampling.
 			setSSEHeaders()
-
-			_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", string(chunk))
-			flusher.Flush()
-
-			// Continue streaming the rest
-			h.handleStreamResult(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan)
+			h.handleStreamResultWithPrefetched(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan, chunk)
 			return
 		}
 	}
@@ -624,15 +622,11 @@ func (h *OpenAIAPIHandler) handleCompletionsStreamingResponse(c *gin.Context, ra
 				return
 			}
 
-			// Success! Set headers.
+			// Success! Set headers and forward the prefetched (converted) chunk
+			// through ForwardStream to ensure unified TTFT sampling.
 			setSSEHeaders()
 
-			// Write the first chunk
 			converted := convertChatCompletionsStreamChunkToCompletions(chunk)
-			if converted != nil {
-				_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", string(converted))
-				flusher.Flush()
-			}
 
 			done := make(chan struct{})
 			var doneOnce sync.Once
@@ -662,16 +656,21 @@ func (h *OpenAIAPIHandler) handleCompletionsStreamingResponse(c *gin.Context, ra
 				}
 			}()
 
-			h.handleStreamResult(c, flusher, func(err error) {
+			h.handleStreamResultWithPrefetched(c, flusher, func(err error) {
 				stop()
 				cliCancel(err)
-			}, convertedChan, errChan)
+			}, convertedChan, errChan, converted)
 			return
 		}
 	}
 }
 func (h *OpenAIAPIHandler) handleStreamResult(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	h.handleStreamResultWithPrefetched(c, flusher, cancel, data, errs, nil)
+}
+
+func (h *OpenAIAPIHandler) handleStreamResultWithPrefetched(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, prefetched []byte) {
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
+		PrefetchedChunk: prefetched,
 		WriteChunk: func(chunk []byte) {
 			_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", string(chunk))
 		},
