@@ -1,14 +1,11 @@
+// Package metrics provides TPS (Tokens Per Second) calculation and aggregation
+// for LLM API proxy requests. It tracks TPS, TTFT (Time To First Token),
+// and TPOT (Time Per Output Token) metrics grouped by provider, model, and streaming mode.
 package metrics
 
 import (
-	"math"
-	"sort"
-	"sync"
 	"time"
 )
-
-// windowSize is the fixed size of the sliding window (number of requests)
-const windowSize = 100
 
 // Persistence defines the interface for persisting and loading sliding window data.
 // This allows windows to be restored after process restarts.
@@ -26,24 +23,8 @@ type TPSCollector struct {
 	// windows holds the sliding window for each grouping key
 	windows map[MetricKey]*SlidingWindow
 
-	// mu protects concurrent access to windows map
-	mu sync.RWMutex
-
 	// persistence is the optional persistence layer for window data
 	persistence Persistence
-}
-
-// SlidingWindow implements a fixed-size circular buffer for request metrics.
-// It maintains the most recent windowSize RequestMetrics records.
-type SlidingWindow struct {
-	// buffer is the circular buffer storing request metrics
-	buffer [windowSize]RequestMetrics
-
-	// pos is the current write position in the circular buffer
-	pos int
-
-	// count is the number of elements currently in the buffer (0 to windowSize)
-	count int
 }
 
 // NewCollector creates a new TPSCollector instance.
@@ -59,29 +40,8 @@ func NewCollector(persistence Persistence) *TPSCollector {
 // It returns a RequestMetrics object that should be used for subsequent
 // RecordFirstToken and CompleteRequest calls.
 func (c *TPSCollector) StartRequest(key MetricKey) *RequestMetrics {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Get or create window for this key
-	window, exists := c.windows[key]
-	if !exists {
-		window = &SlidingWindow{}
-		c.windows[key] = window
-
-		// Try to load persisted data if persistence is configured
-		if c.persistence != nil {
-			if loaded, err := c.persistence.Load(key); err == nil && len(loaded) > 0 {
-				// Restore window state from persisted data
-				for i, m := range loaded {
-					if i < windowSize {
-						window.buffer[i] = m
-						window.count = i + 1
-						window.pos = (i + 1) % windowSize
-					}
-				}
-			}
-		}
-	}
+	// Ensure window exists for this key (created lazily on first access)
+	_ = c.getOrCreateWindow(key)
 
 	// Create new metrics entry
 	metrics := &RequestMetrics{
@@ -89,17 +49,12 @@ func (c *TPSCollector) StartRequest(key MetricKey) *RequestMetrics {
 		StartTime: time.Now(),
 	}
 
-	// Reserve slot in buffer (will be overwritten during CompleteRequest)
-	window.pos = (window.pos + 1) % windowSize
-	if window.count < windowSize {
-		window.count++
-	}
-
 	return metrics
 }
 
 // RecordFirstToken records the time when the first output token is received.
 // This is used to calculate TTFT (Time To First Token).
+// For non-streaming requests, this method should NOT be called.
 func (c *TPSCollector) RecordFirstToken(m *RequestMetrics) {
 	if m == nil {
 		return
@@ -111,171 +66,130 @@ func (c *TPSCollector) RecordFirstToken(m *RequestMetrics) {
 // The metrics are stored in the sliding window for aggregation.
 //
 // Calculations:
-//   - TTFT = FirstTokenTime - StartTime (seconds)
-//   - TPOT = (EndTime - FirstTokenTime) / OutputTokens (seconds per token)
-//   - TPS = OutputTokens / (EndTime - FirstTokenTime) (tokens per second)
+//   - For streaming requests:
+//     * TTFT = FirstTokenTime - StartTime (seconds)
+//     * TPOT = (EndTime - FirstTokenTime) / OutputTokens (seconds per token)
+//     * TPS = OutputTokens / (EndTime - FirstTokenTime) (tokens per second)
+//   - For non-streaming requests:
+//     * TTFT = EndTime - StartTime (total response time, seconds)
+//     * TPOT = TTFT / OutputTokens (average time per token)
+//     * TPS = OutputTokens / TTFT (tokens per second)
 //
-// If outputTokens is 0, the request is discarded (no metrics recorded).
-func (c *TPSCollector) CompleteRequest(m *RequestMetrics, outputTokens int) {
-	if m == nil || outputTokens <= 0 {
-		// Discard requests with no output tokens
-		return
+// Returns error if:
+//   - metrics is nil
+//   - outputTokens is 0 (request is discarded, not recorded)
+//   - calculation fails (invalid timing data)
+//
+// If an error is returned, the request is NOT recorded in the window.
+func (c *TPSCollector) CompleteRequest(m *RequestMetrics, outputTokens int) error {
+	if m == nil {
+		return ErrNilMetrics
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	if outputTokens <= 0 {
+		return ErrNonPositiveTokens
+	}
 
-	// Calculate timing metrics
-	now := time.Now()
-	m.EndTime = now
+	// Set end time
+	m.EndTime = time.Now()
 	m.OutputTokens = outputTokens
 
-	// Calculate durations
-	tokenGenerationDuration := m.EndTime.Sub(m.FirstTokenTime).Seconds()
-	m.TTFT = m.FirstTokenTime.Sub(m.StartTime).Seconds()
+	// Calculate metrics based on streaming mode
+	var err error
+	if m.Key.Streaming {
+		// Streaming: use FirstTokenTime for TTFT and TPS/TPOT calculations
+		m.TTFT, err = CalculateTTFT(m.StartTime, m.FirstTokenTime)
+		if err != nil {
+			return err
+		}
 
-	// Calculate TPOT (Time Per Output Token)
-	if outputTokens > 0 && tokenGenerationDuration > 0 {
-		m.TPOT = tokenGenerationDuration / float64(outputTokens)
-		m.TPS = float64(outputTokens) / tokenGenerationDuration
-		// Round TPS to 2 decimal places
-		m.TPS = math.Round(m.TPS*100) / 100
+		m.TPS, err = CalculateTPS(outputTokens, m.FirstTokenTime, m.EndTime)
+		if err != nil {
+			return err
+		}
+
+		m.TPOT, err = CalculateTPOT(outputTokens, m.FirstTokenTime, m.EndTime)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Non-streaming: TTFT = total response time, use StartTime for TPS/TPOT
+		totalTime := m.EndTime.Sub(m.StartTime)
+		if totalTime <= 0 {
+			return ErrNonPositiveGenerationTime
+		}
+
+		m.TTFT = totalTime.Seconds()
+		m.TPOT = m.TTFT / float64(outputTokens)
+
+		// Calculate TPS using StartTime as reference (treat entire response as generation time)
+		m.TPS, err = CalculateTPS(outputTokens, m.StartTime, m.EndTime)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Store in window
 	window := c.windows[m.Key]
 	if window == nil {
 		// This shouldn't happen as StartRequest creates the window
-		window = &SlidingWindow{}
-		c.windows[m.Key] = window
+		window = c.getOrCreateWindow(m.Key)
 	}
 
-	// Write to current position (reserved in StartRequest)
-	window.buffer[window.pos] = *m
+	window.Add(*m)
 
 	// Persist if configured
 	if c.persistence != nil {
-		metrics := window.getMetrics()
+		metrics := window.GetAll()
 		_ = c.persistence.Save(m.Key, metrics) // Ignore persistence errors
 	}
+
+	return nil
 }
 
 // GetWindowStats returns aggregated statistics for the given metric key.
 // It calculates min, max, avg, median, p95, and p99 for TPS, TTFT, and TPOT.
-func (c *TPSCollector) GetWindowStats(key MetricKey) WindowStats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	window := c.windows[key]
-	if window == nil || window.count == 0 {
-		return WindowStats{Key: key}
+// Returns WindowStats and true if the key exists and has data, otherwise returns zero WindowStats and false.
+func (c *TPSCollector) GetWindowStats(key MetricKey) (WindowStats, bool) {
+	window, exists := c.windows[key]
+	if !exists || window.Len() == 0 {
+		return WindowStats{Key: key}, false
 	}
 
-	metrics := window.getMetrics()
-
-	return calculateStats(key, metrics)
+	stats := window.GetStats()
+	stats.Key = key
+	return stats, true
 }
 
-// getMetrics returns all valid metrics from the window buffer
-func (w *SlidingWindow) getMetrics() []RequestMetrics {
-	if w.count == 0 {
-		return nil
+// GetAllKeys returns all metric keys that have recorded data.
+// The returned slice is empty if no requests have been completed.
+func (c *TPSCollector) GetAllKeys() []MetricKey {
+	keys := make([]MetricKey, 0, len(c.windows))
+	for key := range c.windows {
+		window := c.windows[key]
+		if window != nil && window.Len() > 0 {
+			keys = append(keys, key)
+		}
 	}
-
-	// If buffer is not yet full, return elements 0 to count
-	if w.count < windowSize {
-		return w.buffer[:w.count]
-	}
-
-	// Buffer is full: return elements from pos+1 to end, then 0 to pos
-	result := make([]RequestMetrics, windowSize)
-	copy(result, w.buffer[w.pos+1:])
-	copy(result[windowSize-w.pos-1:], w.buffer[:w.pos+1])
-	return result
+	return keys
 }
 
-// calculateStats computes statistics from a slice of RequestMetrics
-func calculateStats(key MetricKey, metrics []RequestMetrics) WindowStats {
-	if len(metrics) == 0 {
-		return WindowStats{Key: key}
+// getOrCreateWindow gets an existing window or creates a new one for the given key.
+// This is an internal method that is not safe for concurrent use from multiple goroutines.
+// The caller must hold appropriate locks if needed.
+func (c *TPSCollector) getOrCreateWindow(key MetricKey) *SlidingWindow {
+	window, exists := c.windows[key]
+	if !exists {
+		window = NewSlidingWindow()
+		c.windows[key] = window
+
+		// Try to load persisted data if persistence is configured
+		if c.persistence != nil {
+			if loaded, err := c.persistence.Load(key); err == nil && len(loaded) > 0 {
+				// Restore window state from persisted data
+				window.RestoreFrom(loaded)
+			}
+		}
 	}
-
-	// Extract individual metric slices
-	tpsValues := make([]float64, len(metrics))
-	ttftValues := make([]float64, len(metrics))
-	tpotValues := make([]float64, len(metrics))
-
-	for i, m := range metrics {
-		tpsValues[i] = m.TPS
-		ttftValues[i] = m.TTFT
-		tpotValues[i] = m.TPOT
-	}
-
-	// Calculate statistics
-	stats := WindowStats{
-		Key:   key,
-		Count: len(metrics),
-	}
-
-	stats.TPSMin, stats.TPSMax, stats.TPSAvg, stats.TPSMedian, stats.TPSP95, stats.TPSP99 =
-		calculatePercentiles(tpsValues)
-
-	stats.TTFTMin, stats.TTFTMax, stats.TTFTAvg, stats.TTFTMedian, stats.TTFTP95, stats.TTFTP99 =
-		calculatePercentiles(ttftValues)
-
-	stats.TPOTMin, stats.TPOTMax, stats.TPOTAvg, stats.TPOTMedian, stats.TPOTP95, stats.TPOTP99 =
-		calculatePercentiles(tpotValues)
-
-	return stats
-}
-
-// calculatePercentiles computes min, max, avg, median, p95, and p99 from a float64 slice
-func calculatePercentiles(values []float64) (min, max, avg, median, p95, p99 float64) {
-	if len(values) == 0 {
-		return 0, 0, 0, 0, 0, 0
-	}
-
-	// Sort for percentile calculations
-	sorted := make([]float64, len(values))
-	copy(sorted, values)
-	sort.Float64s(sorted)
-
-	min = sorted[0]
-	max = sorted[len(sorted)-1]
-
-	// Calculate average
-	sum := 0.0
-	for _, v := range sorted {
-		sum += v
-	}
-	avg = sum / float64(len(sorted))
-
-	// Calculate percentiles using linear interpolation
-	median = percentile(sorted, 50)
-	p95 = percentile(sorted, 95)
-	p99 = percentile(sorted, 99)
-
-	return min, max, avg, median, p95, p99
-}
-
-// percentile calculates the p-th percentile using linear interpolation
-func percentile(sorted []float64, p float64) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	if len(sorted) == 1 {
-		return sorted[0]
-	}
-
-	index := (float64(p) / 100.0) * float64(len(sorted)-1)
-	lower := int(index)
-	upper := lower + 1
-
-	if upper >= len(sorted) {
-		return sorted[len(sorted)-1]
-	}
-
-	// Linear interpolation
-	weight := index - float64(lower)
-	return sorted[lower]*(1-weight) + sorted[lower+1]*weight
+	return window
 }
