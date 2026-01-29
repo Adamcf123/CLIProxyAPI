@@ -34,12 +34,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. 指标能够按 provider 和 model 分别统计和聚合
   5. 每个请求生成唯一的 tracking ID 用于指标关联
 
-**Plans**: 3 plans in 2 waves
+**Plans**: 4 plans in 2 waves
 
 Plans:
 - [ ] 01-01-PLAN.md — 设计和实现 TPSCollector 核心结构和数据类型
 - [ ] 01-02-PLAN.md — 实现 TPS、TTFT、TPOT 计算逻辑和单元测试
 - [ ] 01-03-PLAN.md — 实现滑动窗口聚合和百分位统计
+- [ ] 01-04-PLAN.md — 完善 TPSCollector 集成滑动窗口和计算功能
 
 ### Phase 2: Metrics Collection
 
