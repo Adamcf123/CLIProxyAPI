@@ -33,6 +33,7 @@
 
 ### 对外契约（Query API 输出方式）
 - 对外必须显式区分 canceled：查询结果中存在明确的 `canceled` outcome/status（不是把 canceled 塞进 failure）。
+- canceled 的持久化表达：使用 `status_code=499` 表达 canceled（且 per-request canceled 时 error 为空 / error_info 为空）。
 - buckets 输出：新增 `canceled_count` 字段（与 success/failure 并列），而不是单独一套 canceled buckets 结构。
 - percentiles 输出：需要在响应中显式体现 canceled 被排除的事实（例如提供 `canceled_count` 的元信息）。
 - per-request 查询（`request_id=...`）：当 outcome 为 canceled 时，保持 error 为空（不把 canceled 表现为故障错误）。
