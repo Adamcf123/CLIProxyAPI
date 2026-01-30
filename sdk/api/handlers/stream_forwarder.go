@@ -1,13 +1,48 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 )
+
+func maybeSetStreamingTerminalLastError(c *gin.Context, errMsg *interfaces.ErrorMessage) {
+	if c == nil || errMsg == nil {
+		return
+	}
+	state, ok := metricsruntime.GetRequestState(c)
+	if !ok || state == nil {
+		return
+	}
+	if state.Snapshot().LastError != "" {
+		return
+	}
+
+	if errMsg.Error != nil {
+		if msg := strings.TrimSpace(errMsg.Error.Error()); msg != "" {
+			state.SetLastError(errors.New(msg))
+			return
+		}
+	}
+
+	status := errMsg.StatusCode
+	if status <= 0 {
+		status = http.StatusInternalServerError
+	}
+	if status >= 400 {
+		if msg := strings.TrimSpace(http.StatusText(status)); msg != "" {
+			state.SetLastError(errors.New(msg))
+			return
+		}
+	}
+
+	state.SetLastError(errors.New("streaming terminal error"))
+}
 
 type StreamForwardOptions struct {
 	// KeepAliveInterval overrides the configured streaming keep-alive interval.
@@ -95,6 +130,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 					}
 				}
 				if terminalErr != nil {
+					maybeSetStreamingTerminalLastError(c, terminalErr)
 					if opts.WriteTerminalError != nil {
 						opts.WriteTerminalError(terminalErr)
 					}
@@ -118,6 +154,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 			}
 			if errMsg != nil {
 				terminalErr = errMsg
+				maybeSetStreamingTerminalLastError(c, errMsg)
 				if opts.WriteTerminalError != nil {
 					opts.WriteTerminalError(errMsg)
 					flusher.Flush()
