@@ -4,6 +4,7 @@ package management
 
 import (
 	"crypto/subtle"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricspersist"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -47,6 +49,16 @@ type Handler struct {
 	allowRemoteOverride bool
 	envSecret           string
 	logDir              string
+
+	// nowUTC provides a deterministic clock for query endpoints.
+	// It defaults to time.Now().UTC() and can be overridden in tests.
+	nowUTC func() time.Time
+
+	// Query API must not reuse the writer connection.
+	metricsDBPath   string
+	metricsReadOnce sync.Once
+	metricsReadDB   *sql.DB
+	metricsReadErr  error
 }
 
 // NewHandler creates a new management handler instance.
@@ -63,9 +75,57 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		tokenStore:          sdkAuth.GetTokenStore(),
 		allowRemoteOverride: envSecret != "",
 		envSecret:           envSecret,
+		nowUTC:              func() time.Time { return time.Now().UTC() },
+		metricsDBPath:       "logs/metrics.db",
 	}
 	h.startAttemptCleanup()
 	return h
+}
+
+func (h *Handler) SetNowUTC(fn func() time.Time) {
+	if h == nil || fn == nil {
+		return
+	}
+	h.nowUTC = fn
+}
+
+func (h *Handler) SetMetricsDBPath(path string) {
+	if h == nil {
+		return
+	}
+	h.metricsDBPath = strings.TrimSpace(path)
+	// This setter is intended for tests; reset the lazy init state.
+	if h.metricsReadDB != nil {
+		_ = h.metricsReadDB.Close()
+		h.metricsReadDB = nil
+	}
+	h.metricsReadOnce = sync.Once{}
+	h.metricsReadErr = nil
+}
+
+func (h *Handler) openMetricsReadDB() (*sql.DB, error) {
+	if h == nil {
+		return nil, fmt.Errorf("handler is nil")
+	}
+	h.metricsReadOnce.Do(func() {
+		path := strings.TrimSpace(h.metricsDBPath)
+		if path == "" {
+			path = "logs/metrics.db"
+		}
+		db, err := metricspersist.InitDB(path)
+		if err != nil {
+			h.metricsReadErr = err
+			return
+		}
+		h.metricsReadDB = db
+	})
+	if h.metricsReadErr != nil {
+		return nil, h.metricsReadErr
+	}
+	if h.metricsReadDB == nil {
+		return nil, fmt.Errorf("metrics read db unavailable")
+	}
+	return h.metricsReadDB, nil
 }
 
 // startAttemptCleanup launches a background goroutine that periodically
