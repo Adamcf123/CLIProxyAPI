@@ -146,7 +146,14 @@ Plans:
   2. Failure paths 仍会发布 failure record（不会被 ensurePublished 抢占）
   3. 新增测试锁定：无 usage metadata 的请求仍会在 SQLite 中出现可查询行
 
-**Plans**: Pending (will be created by `/gsd-plan-phase 6`)
+**Plans**: 5 plans in 3 waves
+
+Plans:
+- [x] 06-01-PLAN.md — usageReporter: 发布测试缝 + 失败优先级单测
+- [ ] 06-02-PLAN.md — Claude/Codex/Qwen: 结束时 ensurePublished（含流式 goroutine）
+- [ ] 06-03-PLAN.md — Gemini/Vertex/AIStudio: 结束时 ensurePublished（含流式 goroutine）
+- [ ] 06-04-PLAN.md — SQLite 回归测试：无 usage 也必须可查
+- [ ] 06-05-PLAN.md — Executor wiring 回归：stream end 必须 ensurePublished
 
 ## Progress
 
