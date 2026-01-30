@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+const defaultRetentionDays = 7
 
 // InitDB opens (and creates if missing) a SQLite database file at the given path.
 // It also applies required PRAGMAs to stabilize concurrency and performance.
@@ -56,4 +59,36 @@ func applyPragmas(ctx context.Context, db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// Cleanup prunes metrics rows older than retentionDays.
+//
+// Contract:
+// - accuracy: rows are removed based on SQLite's datetime('now', ...) comparison
+// - security_boundary: internal-only; retentionDays must be positive
+// - side_effects: deletes rows (non-idempotent, but safe to run repeatedly)
+func Cleanup(db *sql.DB, retentionDays int) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("db is required")
+	}
+	if retentionDays <= 0 {
+		return 0, fmt.Errorf("retentionDays must be > 0")
+	}
+
+	// SQLite accepts modifiers like "-7 days" as the second argument to datetime().
+	modifier := fmt.Sprintf("-%d days", retentionDays)
+	modifier = strings.TrimSpace(modifier)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := db.ExecContext(ctx, `DELETE FROM metrics WHERE created_at < datetime('now', ?);`, modifier)
+	if err != nil {
+		return 0, fmt.Errorf("delete old metrics: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return rows, nil
 }
