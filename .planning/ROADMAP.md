@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Streaming Failure Semantics** - 流式失败语义可追溯且不会污染聚合
 - [x] **Phase 6: Guaranteed Usage Publish** - 无 usage 场景也能落库，保证历史可追溯
 - [x] **Phase 7: Docs & Traceability Cleanup** - 修复规划文档漂移（Requirements/Docs 与实现一致）
-- [ ] **Phase 8: Persistence Contract & Observability** - 明确 best-effort 持久化契约并补齐可观测性
+- [x] **Phase 8: Persistence Contract & Observability** - 明确 best-effort 持久化契约并补齐可观测性
 - [ ] **Phase 9: Cancel/Disconnect Semantics** - 明确客户端取消/断连的失败语义并锁定测试
 - [ ] **Phase 10: Request ID Robustness** - 强化 request_id 唯一性与冲突可见性，避免静默缺行
 - [ ] **Phase 11: Runtime Validation (Optional)** - 在真实流量下验证性能/输出/极端流式错误语义
@@ -198,7 +198,11 @@ Plans:
   2. 关键丢弃路径可追踪（例如 queue-full / writer-not-started / insert failure）且不会弱化安全边界
   3. 关键行为有回归测试或契约测试锁定（至少覆盖可观测性信号）
 
-**Plans**: TBD (not planned yet)
+**Plans**: 2 plans in 2 waves
+
+Plans:
+- [x] 08-01-PLAN.md — 在 writer drop/insert failure 路径记录 health，并仅在 degraded 时向 management meta 暴露
+- [x] 08-02-PLAN.md — 用单测/契约测试锁定 degraded meta 语义，并在 README 固化 best-effort 契约与示例
 
 ### Phase 9: Cancel/Disconnect Semantics
 
@@ -265,7 +269,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Streaming Failure Semantics | 3/3 | Complete | 2026-01-30 |
 | 6. Guaranteed Usage Publish | 5/5 | Complete | 2026-01-30 |
 | 7. Docs & Traceability Cleanup | 4/4 | Complete | 2026-01-31 |
-| 8. Persistence Contract & Observability | 0/? | Planned | |
+| 8. Persistence Contract & Observability | 2/2 | Complete | 2026-01-30 |
 | 9. Cancel/Disconnect Semantics | 0/? | Planned | |
 | 10. Request ID Robustness | 0/? | Planned | |
 | 11. Runtime Validation (Optional) | 0/? | Planned (Optional) | |
