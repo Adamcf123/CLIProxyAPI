@@ -5,23 +5,24 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Phase 7 complete (ready for Phase 8)
+**Current focus:** Phase 10 complete, ready for Phase 11 (optional)
 
 ## Current Position
 
-Phase: 7 of 11 (Docs & Traceability Cleanup)
-Plan: 4 of 4 in current phase
-Status: Verified
-Last activity: 2026-01-31 — Verified Phase 7 goal (07-VERIFICATION.md)
+Phase: 10 of 11 (Request ID Robustness)
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-02-01 — Completed 10-03-PLAN.md (conflict contract tests)
+Verification: 2026-02-01 — Phase 10 goal passed (.planning/phases/10-request-id-robustness/10-VERIFICATION.md)
 
-Progress: [██████████] 100% of planned plans to date (27/27) + Phase 7 verified
+Progress: [██████████] 100% of planned plans to date (35/35)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 27
+- Total plans completed: 35
 - Average duration: 7 min
-- Total execution time: 1.8 hours
+- Total execution time: 2.1 hours
 
 **By Phase:**
 
@@ -34,10 +35,12 @@ Progress: [██████████] 100% of planned plans to date (27/27)
 | 05-streaming-failure-semantics | 3 | 3 | 4 min |
 | 06-guaranteed-usage-publish | 5 | 5 | 2 min |
 | 07-docs-traceability-cleanup | 4 | 4 | 2 min |
+| 08-persistence-contract-observability | 2 | 2 | 5 min |
+| 09-cancel-disconnect-semantics | 3 | 3 | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 2 min, 1 min, 2 min, 1 min, 1 min
-- Trend: ↓ (improving)
+- Last 5 plans: 1 min, 2 min, 1 min, 4 min, 5 min
+- Trend: → (stable)
 
 *Updated after each plan completion*
 
@@ -84,6 +87,18 @@ Recent decisions affecting current work:
 **From Phase 05-streaming-failure-semantics:**
 - Streaming terminal errors persist via RequestState.LastError and map into MetricRecord.ErrorInfo for Query API classification
 
+**From Phase 08-persistence-contract-observability:**
+- Best-effort persistence drops are observable via process-lifetime health (dropped_total + last_drop + quiet-period degraded)
+- Drop reasons exposed as stable enum codes: queue_full, writer_not_started, insert_failure
+- /v0/management/metrics emits meta.persistence only when degraded to preserve default JSON shape
+
+**From Phase 09-cancel-disconnect-semantics:**
+- Outcome 三分法：success / failure / canceled，canceled 用 status_code=499 表达
+- Priority: failure > canceled > success — failure 可以覆盖 canceled，但 success 不能
+- Timeout (DeadlineExceeded) 归类为 failure (504)，不是 canceled
+- Canceled 的 ErrorInfo 必须为空，且不计入 TPS/TPOT 聚合
+- Query API percentiles 排除 canceled 样本，buckets 每 bucket 单列 canceled_count
+
 ### Pending Todos
 
 [From .planning/todos/pending/ — ideas captured during sessions]
@@ -99,6 +114,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-30 15:31Z
-Stopped at: Verified Phase 6 goal (06-VERIFICATION.md)
+Last session: 2026-01-31 18:03Z
+Stopped at: Completed 10-03-PLAN.md
 Resume file: None

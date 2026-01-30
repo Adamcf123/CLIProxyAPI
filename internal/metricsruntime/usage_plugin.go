@@ -88,21 +88,30 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	// Try to get gin context and request state for richer metrics.
 	var state *RequestState
 	var snap RequestStateSnapshot
+	isCanceled := false
 	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
 		state, _ = GetRequestState(ginCtx)
 		if state != nil {
 			snap = state.Snapshot()
+			isCanceled = snap.IsClientCanceled()
 			// Prefer state tracking ID if available.
 			if snap.TrackingID != "" {
 				trackingID = snap.TrackingID
 			}
-			if snap.StatusCode != 0 {
-				code := int64(snap.StatusCode)
+			if isCanceled {
+				code := int64(statusClientClosedRequest)
 				statusCodePtr = &code
-			}
-			if snap.LastError != "" {
-				v := snap.LastError
-				errorInfoPtr = &v
+				// canceled must not be expressed via error_info.
+				errorInfoPtr = nil
+			} else {
+				if snap.StatusCode != 0 {
+					code := int64(snap.StatusCode)
+					statusCodePtr = &code
+				}
+				if snap.LastError != "" {
+					v := snap.LastError
+					errorInfoPtr = &v
+				}
 			}
 			// Backfill state tokens when usage is available so progress/summary can show them.
 			if !usageMissing {
@@ -136,7 +145,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 
 	// Compute TPS/TPOT when we have output tokens and sufficient timing data.
 	// Note: even when TPS/TPOT are suppressed for confidence reasons, TTFT is still logged above.
-	if outputTokens > 0 && state != nil {
+	if outputTokens > 0 && state != nil && !isCanceled {
 		key := metrics.MetricKey{
 			Provider:  record.Provider,
 			Model:     record.Model,

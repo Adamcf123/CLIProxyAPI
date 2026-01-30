@@ -54,6 +54,10 @@ type Handler struct {
 	// It defaults to time.Now().UTC() and can be overridden in tests.
 	nowUTC func() time.Time
 
+	// persistenceHealth provides process-lifetime best-effort persistence health.
+	// It is injected only at construction time to avoid runtime-mutable production behavior.
+	persistenceHealth func(time.Time) metricspersist.PersistenceHealth
+
 	// Query API must not reuse the writer connection.
 	metricsDBPath   string
 	metricsReadOnce sync.Once
@@ -61,8 +65,19 @@ type Handler struct {
 	metricsReadErr  error
 }
 
+type HandlerOption func(*Handler)
+
+func WithPersistenceHealthProvider(fn func(time.Time) metricspersist.PersistenceHealth) HandlerOption {
+	return func(h *Handler) {
+		if h == nil || fn == nil {
+			return
+		}
+		h.persistenceHealth = fn
+	}
+}
+
 // NewHandler creates a new management handler instance.
-func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Manager) *Handler {
+func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Manager, opts ...HandlerOption) *Handler {
 	envSecret, _ := os.LookupEnv("MANAGEMENT_PASSWORD")
 	envSecret = strings.TrimSpace(envSecret)
 
@@ -76,7 +91,13 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		allowRemoteOverride: envSecret != "",
 		envSecret:           envSecret,
 		nowUTC:              func() time.Time { return time.Now().UTC() },
+		persistenceHealth:   metricspersist.GetPersistenceHealth,
 		metricsDBPath:       "logs/metrics.db",
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(h)
+		}
 	}
 	h.startAttemptCleanup()
 	return h

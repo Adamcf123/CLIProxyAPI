@@ -1,7 +1,9 @@
 package metricsruntime
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -112,5 +114,57 @@ func TestPrintSummary_TTFTFallbackWithoutMetrics(t *testing.T) {
 	}
 	if got < 1.49 || got > 1.51 {
 		t.Fatalf("expected ttft about 1.5, got %v", got)
+	}
+}
+
+func TestRequestState_MarkClientCanceledIsStickyUntilFailure(t *testing.T) {
+	state := NewRequestState(false, "gpt-5.2")
+	state.SetStatusCode(200)
+	state.MarkClientCanceled()
+	if !state.IsClientCanceled() {
+		t.Fatalf("expected state to be client-canceled")
+	}
+
+	// Handler tail code should not override canceled back to success.
+	state.SetStatusCode(200)
+	if snap := state.Snapshot(); !snap.IsClientCanceled() || snap.StatusCode != statusClientClosedRequest {
+		t.Fatalf("expected canceled to remain status_code=%d, got status_code=%d", statusClientClosedRequest, snap.StatusCode)
+	}
+
+	// Explicit failures must override canceled.
+	state.SetStatusCode(500)
+	if snap := state.Snapshot(); snap.IsClientCanceled() {
+		t.Fatalf("expected canceled to be overridden by failure")
+	}
+	if snap := state.Snapshot(); snap.StatusCode != 500 {
+		t.Fatalf("expected status_code=500, got %d", snap.StatusCode)
+	}
+}
+
+func TestRequestState_LastErrorOverridesCanceledAndUses504ForDeadline(t *testing.T) {
+	state := NewRequestState(false, "gpt-5.2")
+	state.MarkClientCanceled()
+	state.SetLastError(context.DeadlineExceeded)
+	if snap := state.Snapshot(); snap.IsClientCanceled() {
+		t.Fatalf("expected canceled to be cleared by LastError")
+	}
+	if snap := state.Snapshot(); snap.StatusCode != statusGatewayTimeout {
+		t.Fatalf("expected status_code=%d, got %d", statusGatewayTimeout, snap.StatusCode)
+	}
+	if snap := state.Snapshot(); snap.LastError == "" {
+		t.Fatalf("expected LastError to be set")
+	}
+
+	state = NewRequestState(false, "gpt-5.2")
+	state.MarkClientCanceled()
+	state.SetLastError(errors.New("boom"))
+	if snap := state.Snapshot(); snap.IsClientCanceled() {
+		t.Fatalf("expected canceled to be cleared by LastError")
+	}
+	if snap := state.Snapshot(); snap.LastError == "" {
+		t.Fatalf("expected LastError to be set")
+	}
+	if snap := state.Snapshot(); snap.StatusCode != statusInternalServerError {
+		t.Fatalf("expected status_code=%d, got %d", statusInternalServerError, snap.StatusCode)
 	}
 }

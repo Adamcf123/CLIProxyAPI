@@ -2,6 +2,8 @@ package metricsruntime
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -10,6 +12,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
 	"github.com/tidwall/gjson"
+)
+
+const (
+	// statusClientClosedRequest uses the de-facto nginx convention for "client closed request".
+	// We use this as a durable persistence signal for canceled/disconnected requests.
+	statusClientClosedRequest = 499
+	statusInternalServerError = 500
+	statusGatewayTimeout      = 504
 )
 
 type RequestState struct {
@@ -58,6 +68,14 @@ type RequestStateSnapshot struct {
 	Metrics      *metrics.RequestMetrics
 
 	LastError string
+}
+
+func (s RequestStateSnapshot) IsClientCanceled() bool {
+	return s.StatusCode == statusClientClosedRequest
+}
+
+func (s RequestStateSnapshot) IsFailure() bool {
+	return s.StatusCode >= 400 || s.LastError != ""
 }
 
 func NewRequestState(streaming bool, requestedModel string) *RequestState {
@@ -142,6 +160,30 @@ func (s *RequestState) SetStatusCode(code int) {
 		return
 	}
 	s.mu.Lock()
+	// Priority: failure > canceled > success.
+	//
+	// Once we mark a request as client-canceled (499), we must not let handler tail
+	// code (often `state.SetStatusCode(c.Writer.Status())`) overwrite it back into
+	// a <400 status. Explicit failures (>= 400) are still allowed to override.
+	if s.StatusCode == statusClientClosedRequest {
+		if code > 0 && code < 400 {
+			s.mu.Unlock()
+			return
+		}
+	}
+	if s.StatusCode >= 400 && s.StatusCode != statusClientClosedRequest {
+		s.mu.Unlock()
+		return
+	}
+	if s.LastError != "" {
+		// Failure already established via error_info; don't allow a later non-failure
+		// status to weaken it.
+		if code >= 400 {
+			s.StatusCode = code
+		}
+		s.mu.Unlock()
+		return
+	}
 	s.StatusCode = code
 	s.mu.Unlock()
 }
@@ -155,8 +197,43 @@ func (s *RequestState) SetLastError(err error) {
 		s.LastError = ""
 	} else {
 		s.LastError = err.Error()
+		// Ensure statusClientClosedRequest is ONLY used for canceled.
+		// Any explicit error upgrades the outcome to failure.
+		if s.StatusCode < 400 || s.StatusCode == statusClientClosedRequest {
+			if errors.Is(err, context.DeadlineExceeded) {
+				s.StatusCode = statusGatewayTimeout
+			} else {
+				s.StatusCode = statusInternalServerError
+			}
+		}
 	}
 	s.mu.Unlock()
+}
+
+// MarkClientCanceled marks the request as canceled/disconnected.
+// This MUST NOT write error_info (LastError) and MUST NOT override an explicit failure.
+func (s *RequestState) MarkClientCanceled() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.StatusCode >= 400 {
+		return
+	}
+	if s.LastError != "" {
+		return
+	}
+	s.StatusCode = statusClientClosedRequest
+}
+
+func (s *RequestState) IsClientCanceled() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.StatusCode == statusClientClosedRequest
 }
 
 func (s *RequestState) SetInputTokens(tokens int) {
