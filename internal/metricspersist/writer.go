@@ -101,6 +101,7 @@ func (w *sqliteWriter) run() {
 		request_id,
 		provider,
 		model,
+		streaming,
 		tps,
 		ttft,
 		tpot,
@@ -110,7 +111,7 @@ func (w *sqliteWriter) run() {
 		duration_ms,
 		status_code,
 		error_info
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(request_id) DO NOTHING;`
 
 	stmt, err := db.Prepare(insertSQL)
@@ -124,6 +125,10 @@ func (w *sqliteWriter) run() {
 		if r.RequestID == "" || r.Provider == "" || r.Model == "" {
 			return
 		}
+		streaming := int64(0)
+		if r.Streaming != nil && *r.Streaming {
+			streaming = 1
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), insertTimeout)
 		defer cancel()
 		_, _ = stmt.ExecContext(
@@ -131,6 +136,7 @@ func (w *sqliteWriter) run() {
 			r.RequestID,
 			r.Provider,
 			r.Model,
+			streaming,
 			r.TPS,
 			r.TTFT,
 			r.TPOT,

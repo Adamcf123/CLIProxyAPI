@@ -99,12 +99,13 @@ Plans:
   3. API 支持按时间窗口（如 1 小时、1 天）聚合查询
   4. API 返回格式清晰、易于解析
 
-**Plans**: TBD
+**Plans**: 4 plans in 4 waves
 
 Plans:
-- [ ] 04-01: 实现基础查询 API（按时间范围查询）
-- [ ] 04-02: 实现百分位统计功能
-- [ ] 04-03: 实现时间窗口聚合查询
+- [ ] 04-01-PLAN.md — 补齐 streaming 维度（schema + writer 入库）
+- [ ] 04-02-PLAN.md — 上线 GET /v0/management/metrics（request_id 查询 + 校验 + meta）
+- [ ] 04-03-PLAN.md — 实现 mode=percentiles（p50/p95/p99，复用线性插值语义）
+- [ ] 04-04-PLAN.md — 实现 mode=buckets（固定粒度 + UTC 对齐 + 空 bucket 回填）
 
 ## Progress
 
@@ -116,4 +117,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Metrics Foundation | 4/4 | Complete | 2025-01-29 |
 | 2. Metrics Collection | 4/4 | Complete | 2026-01-29 |
 | 3. Persistence | 3/3 | Complete | 2026-01-30 |
-| 4. Query API | 0/3 | Not started | - |
+| 4. Query API | 0/4 | Not started | - |
