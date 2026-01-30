@@ -29,6 +29,10 @@ type metricsMeta struct {
 	EffectiveTo   string         `json:"effective_to"`
 	Filters       metricsFilters `json:"filters"`
 
+	// CanceledCount is emitted only for mode=percentiles to make it explicit
+	// that canceled samples (status_code=499) were excluded from percentile math.
+	CanceledCount *int `json:"canceled_count,omitempty"`
+
 	// Persistence is emitted only when best-effort persistence is degraded.
 	Persistence *metricsPersistenceMeta `json:"persistence,omitempty"`
 }
@@ -255,7 +259,7 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 
 	switch mode {
 	case "percentiles":
-		out, err := h.queryMetricsPercentiles(c.Request.Context(), effectiveFrom, effectiveTo, filters)
+		out, canceledCount, err := h.queryMetricsPercentiles(c.Request.Context(), effectiveFrom, effectiveTo, filters)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, metricsEnvelope[any]{
 				Error: "failed to query metrics",
@@ -263,6 +267,8 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 			})
 			return
 		}
+		cc := canceledCount
+		meta.CanceledCount = &cc
 		out.Meta = meta
 		c.JSON(http.StatusOK, out)
 		return
@@ -384,12 +390,14 @@ type metricsPercentilesKey struct {
 	Streaming bool
 }
 
-func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Time, filters metricsFilters) (metricsPercentilesResponse, error) {
+func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Time, filters metricsFilters) (metricsPercentilesResponse, int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	canceledCount := 0
 
 	db, err := h.openMetricsReadDB()
 	if err != nil {
@@ -397,9 +405,9 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		// treat it as "no data" for percentiles mode.
 		msg := err.Error()
 		if strings.Contains(msg, "unable to open database file") || strings.Contains(msg, "no such file or directory") {
-			return metricsPercentilesResponse{}, nil
+			return metricsPercentilesResponse{}, canceledCount, nil
 		}
-		return metricsPercentilesResponse{}, err
+		return metricsPercentilesResponse{}, canceledCount, err
 	}
 
 	q := `SELECT
@@ -438,9 +446,9 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		// When schema is missing (e.g., a fresh DB file without migrations),
 		// treat it as empty result rather than a hard 500.
 		if strings.Contains(err.Error(), "no such table: metrics") {
-			return metricsPercentilesResponse{}, nil
+			return metricsPercentilesResponse{}, canceledCount, nil
 		}
-		return metricsPercentilesResponse{}, err
+		return metricsPercentilesResponse{}, canceledCount, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -470,19 +478,28 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 			&tpotVal,
 			&durMS,
 		); err != nil {
-			return metricsPercentilesResponse{}, err
+			return metricsPercentilesResponse{}, canceledCount, err
+		}
+
+		var statusCodePtr *int64
+		if statusCode.Valid {
+			v := statusCode.Int64
+			statusCodePtr = &v
+		}
+		var errorInfoPtr *string
+		if errorInfo.Valid {
+			s := errorInfo.String
+			errorInfoPtr = &s
+		}
+		outcome := classifyMetricsOutcome(statusCodePtr, errorInfoPtr)
+		if outcome == metricsOutcomeCanceled {
+			canceledCount++
+			continue
 		}
 
 		key := metricsPercentilesKey{Provider: providerVal, Model: modelVal, Streaming: streamingVal != 0}
-		isSuccess := statusCode.Valid && statusCode.Int64 >= 200 && statusCode.Int64 < 300
-		if isSuccess {
-			if errorInfo.Valid && strings.TrimSpace(errorInfo.String) != "" {
-				isSuccess = false
-			}
-		}
-
 		target := failureAgg
-		if isSuccess {
+		if outcome == metricsOutcomeSuccess {
 			target = successAgg
 		}
 		agg := target[key]
@@ -505,7 +522,7 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return metricsPercentilesResponse{}, err
+		return metricsPercentilesResponse{}, canceledCount, err
 	}
 
 	buildGroups := func(m map[metricsPercentilesKey]*metricsPercentilesAgg) []metricsPercentilesGroup {
@@ -538,7 +555,7 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 	return metricsPercentilesResponse{
 		Success: buildGroups(successAgg),
 		Failure: buildGroups(failureAgg),
-	}, nil
+	}, canceledCount, nil
 }
 
 func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, bucket time.Duration, filters metricsFilters) (metricsBucketsResponse, error) {
