@@ -49,18 +49,20 @@
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| METR-01 | Phase 1 | Complete |
-| METR-02 | Phase 1 | Complete |
-| METR-03 | Phase 1 | Complete |
-| METR-04 | Phase 1 | Complete |
-| DISP-01 | Phase 2 | Complete |
-| DISP-02 | Phase 2 | Complete |
-| STOR-01 | Phase 3 | Complete |
-| STOR-02 | Phase 4 | Complete |
-| STOR-03 | Phase 4 | Complete |
-| STOR-04 | Phase 4 | Complete |
+事实来源：*-VERIFICATION.md（例如 `.planning/phases/01-metrics-foundation/01-VERIFICATION.md`）用于判断 requirement 是否已满足；`REQUIREMENTS.md` 是面向审计/交付的追踪视图。
+
+| Requirement | Phase | Status | Evidence |
+|-------------|-------|--------|----------|
+| METR-01 | Phase 1 | Complete | .planning/phases/01-metrics-foundation/01-VERIFICATION.md |
+| METR-02 | Phase 1 | Complete | .planning/phases/01-metrics-foundation/01-VERIFICATION.md |
+| METR-03 | Phase 1 | Complete | .planning/phases/01-metrics-foundation/01-VERIFICATION.md |
+| METR-04 | Phase 1 | Complete | .planning/phases/01-metrics-foundation/01-VERIFICATION.md |
+| DISP-01 | Phase 2 | Complete | — |
+| DISP-02 | Phase 2 | Complete | — |
+| STOR-01 | Phase 3 | Complete | — |
+| STOR-02 | Phase 4 | Complete | — |
+| STOR-03 | Phase 4 | Complete | — |
+| STOR-04 | Phase 4 | Complete | — |
 
 **Coverage:**
 - v1 requirements: 10 total
