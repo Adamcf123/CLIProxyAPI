@@ -95,7 +95,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
-	defer reporter.trackFailure(ctx, &err)
+	defer reporter.finalize(ctx, &err)
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("claude")
 	// Use streaming translation to preserve function calling, except for claude.
@@ -332,6 +332,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	stream = out
 	go func() {
 		defer close(out)
+		defer reporter.ensurePublished(ctx)
 		defer func() {
 			if errClose := decodedBody.Close(); errClose != nil {
 				log.Errorf("response body close error: %v", errClose)

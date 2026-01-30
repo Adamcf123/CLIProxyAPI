@@ -114,7 +114,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
-	defer reporter.trackFailure(ctx, &err)
+	defer reporter.finalize(ctx, &err)
 
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("gemini-cli")
@@ -385,6 +385,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		stream = out
 		go func(resp *http.Response, reqBody []byte, attemptModel string) {
 			defer close(out)
+			defer reporter.ensurePublished(ctx)
 			defer func() {
 				if errClose := resp.Body.Close(); errClose != nil {
 					log.Errorf("gemini cli executor: close response body error: %v", errClose)

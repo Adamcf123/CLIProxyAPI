@@ -7,15 +7,15 @@
 
 ### Metrics（指标）
 
-- [ ] **METR-01**: 计算 TPS（输出 tokens / 生成时间）
-- [ ] **METR-02**: 计算 TTFT（首个 token 响应时间）
-- [ ] **METR-03**: 计算 TPOT（每个输出 token 的平均时间）
-- [ ] **METR-04**: 按 provider/model 分别统计指标
+- [x] **METR-01**: 计算 TPS（输出 tokens / 生成时间）
+- [x] **METR-02**: 计算 TTFT（首个 token 响应时间）
+- [x] **METR-03**: 计算 TPOT（每个输出 token 的平均时间）
+- [x] **METR-04**: 按 provider/model 分别统计指标
 
 ### Display（展示）
 
-- [ ] **DISP-01**: 响应结束后显示本次请求的指标汇总
-- [ ] **DISP-02**: 将指标写入结构化日志
+- [x] **DISP-01**: 响应结束后显示本次请求的指标汇总
+- [x] **DISP-02**: 将指标写入结构化日志
 
 ### Storage（存储）
 
@@ -49,18 +49,20 @@
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| METR-01 | Phase 1 | Pending |
-| METR-02 | Phase 1 | Pending |
-| METR-03 | Phase 1 | Pending |
-| METR-04 | Phase 1 | Pending |
-| DISP-01 | Phase 2 | Pending |
-| DISP-02 | Phase 2 | Pending |
-| STOR-01 | Phase 3 | Complete |
-| STOR-02 | Phase 4 | Complete |
-| STOR-03 | Phase 4 | Complete |
-| STOR-04 | Phase 4 | Complete |
+事实来源：*-VERIFICATION.md（例如 `.planning/phases/01-metrics-foundation/01-VERIFICATION.md`）用于判断 requirement 是否已满足；`REQUIREMENTS.md` 是面向审计/交付的追踪视图。
+
+| Requirement | Phase | Status | Evidence |
+|-------------|-------|--------|----------|
+| METR-01 | Phase 1 | Complete | .planning/phases/01-metrics-foundation/01-VERIFICATION.md |
+| METR-02 | Phase 1 | Complete | .planning/phases/01-metrics-foundation/01-VERIFICATION.md |
+| METR-03 | Phase 1 | Complete | .planning/phases/01-metrics-foundation/01-VERIFICATION.md |
+| METR-04 | Phase 1 | Complete | .planning/phases/01-metrics-foundation/01-VERIFICATION.md |
+| DISP-01 | Phase 2 | Complete | — |
+| DISP-02 | Phase 2 | Complete | — |
+| STOR-01 | Phase 3 | Complete | — |
+| STOR-02 | Phase 4 | Complete | — |
+| STOR-03 | Phase 4 | Complete | — |
+| STOR-04 | Phase 4 | Complete | — |
 
 **Coverage:**
 - v1 requirements: 10 total
@@ -69,4 +71,4 @@
 
 ---
 *Requirements defined: 2025-01-29*
-*Last updated: 2026-01-30 after phase 4 verification*
+*Last updated: 2026-01-31 after phase 7 docs cleanup*

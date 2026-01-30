@@ -89,7 +89,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
-	defer reporter.trackFailure(ctx, &err)
+	defer reporter.finalize(ctx, &err)
 
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("codex")
@@ -365,6 +365,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	stream = out
 	go func() {
 		defer close(out)
+		defer reporter.ensurePublished(ctx)
 		defer func() {
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("codex executor: close response body error: %v", errClose)
