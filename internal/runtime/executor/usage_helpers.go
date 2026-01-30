@@ -26,6 +26,10 @@ type usageReporter struct {
 	once        sync.Once
 }
 
+// publishUsageRecord is a test seam for isolating usageReporter behavior.
+// Production code uses usage.PublishRecord.
+var publishUsageRecord = usage.PublishRecord
+
 func newUsageReporter(ctx context.Context, provider, model string, auth *cliproxyauth.Auth) *usageReporter {
 	apiKey := apiKeyFromContext(ctx)
 	reporter := &usageReporter{
@@ -48,6 +52,18 @@ func (r *usageReporter) publish(ctx context.Context, detail usage.Detail) {
 
 func (r *usageReporter) publishFailure(ctx context.Context) {
 	r.publishWithOutcome(ctx, usage.Detail{}, true)
+}
+
+// finalize is a non-streaming-safe helper that avoids defer-order hazards.
+//
+// Important: Do NOT use finalize for streaming ExecuteStream-style functions that
+// return a channel and start a goroutine. In those cases, ensurePublished must
+// run at the end of the stream goroutine.
+func (r *usageReporter) finalize(ctx context.Context, errPtr *error) {
+	// Failure must remain authoritative: publish failure first (if needed), then
+	// ensure we published at least one record for no-usage success paths.
+	r.trackFailure(ctx, errPtr)
+	r.ensurePublished(ctx)
 }
 
 func (r *usageReporter) trackFailure(ctx context.Context, errPtr *error) {
@@ -73,7 +89,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 		return
 	}
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, usage.Record{
+		publishUsageRecord(ctx, usage.Record{
 			Provider:    r.provider,
 			Model:       r.model,
 			Source:      r.source,
@@ -96,7 +112,7 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 		return
 	}
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, usage.Record{
+		publishUsageRecord(ctx, usage.Record{
 			Provider:    r.provider,
 			Model:       r.model,
 			Source:      r.source,
