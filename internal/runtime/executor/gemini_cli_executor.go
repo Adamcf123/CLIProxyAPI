@@ -385,6 +385,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		stream = out
 		go func(resp *http.Response, reqBody []byte, attemptModel string) {
 			defer close(out)
+			defer reporter.ensurePublished(ctx)
 			defer func() {
 				if errClose := resp.Body.Close(); errClose != nil {
 					log.Errorf("gemini cli executor: close response body error: %v", errClose)
