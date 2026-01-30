@@ -7,7 +7,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricslog"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricspersist"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
@@ -20,7 +19,7 @@ const (
 )
 
 // MetricsPlugin implements sdk/cliproxy/usage.Plugin to calculate performance
-// metrics (TPS, TTFT, TPOT) and persist them as structured JSONL logs.
+// metrics (TPS, TTFT, TPOT) and persist them to SQLite.
 type MetricsPlugin struct {
 	collector *metrics.TPSCollector
 }
@@ -51,25 +50,36 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	usageMissing := inputTokens == 0 && outputTokens == 0 && totalTokens == 0 && !record.Failed
 
 	// Prepare log line with available data.
-	line := metricslog.MetricsLogLine{
-		TrackingID: record.AuthID, // fallback; may be overwritten below
-		Provider:   record.Provider,
-		Model:      record.Model,
-		Timestamp:  now,
-	}
+	trackingID := record.AuthID // fallback; may be overwritten below
+	provider := record.Provider
+	model := record.Model
+
+	var (
+		tps  *float64
+		ttft *float64
+		tpot *float64
+
+		inputTokensPtr  *int64
+		outputTokensPtr *int64
+		totalTokensPtr  *int64
+
+		durationMSPtr *int64
+		statusCodePtr *int64
+		errorInfoPtr  *string
+	)
 
 	if !usageMissing {
 		if inputTokens != 0 {
 			v := inputTokens
-			line.InputTokens = &v
+			inputTokensPtr = &v
 		}
 		if outputTokens != 0 {
 			v := outputTokens
-			line.OutputTokens = &v
+			outputTokensPtr = &v
 		}
 		if totalTokens != 0 {
 			v := totalTokens
-			line.TotalTokens = &v
+			totalTokensPtr = &v
 		}
 	}
 
@@ -82,15 +92,15 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 			snap = state.Snapshot()
 			// Prefer state tracking ID if available.
 			if snap.TrackingID != "" {
-				line.TrackingID = snap.TrackingID
+				trackingID = snap.TrackingID
 			}
-			line.RequestPath = &snap.RequestPath
 			if snap.StatusCode != 0 {
 				code := int64(snap.StatusCode)
-				line.StatusCode = &code
+				statusCodePtr = &code
 			}
 			if snap.LastError != "" {
-				line.ErrorInfo = &snap.LastError
+				v := snap.LastError
+				errorInfoPtr = &v
 			}
 			// Backfill state tokens when usage is available so progress/summary can show them.
 			if !usageMissing {
@@ -110,14 +120,14 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 				secs := snap.FirstContentTokenAt.Sub(snap.StartedAt).Seconds()
 				if secs > 0 {
 					v := secs
-					line.TTFT = &v
+					ttft = &v
 				}
 			}
 		} else {
 			secs := now.Sub(snap.StartedAt).Seconds()
 			if secs > 0 {
 				v := secs
-				line.TTFT = &v
+				ttft = &v
 			}
 		}
 	}
@@ -133,7 +143,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 
 		// Build RequestMetrics for calculation.
 		m := &metrics.RequestMetrics{
-			TrackingID: line.TrackingID,
+			TrackingID: trackingID,
 			Key:        key,
 			StartTime:  snap.StartedAt,
 			EndTime:    now,
@@ -160,15 +170,15 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 			// Populate log line with calculated metrics.
 			if m.TPS != 0 {
 				v := m.TPS
-				line.TPS = &v
+				tps = &v
 			}
 			if m.TTFT != 0 {
 				v := m.TTFT
-				line.TTFT = &v
+				ttft = &v
 			}
 			if m.TPOT != 0 {
 				v := m.TPOT
-				line.TPOT = &v
+				tpot = &v
 			}
 
 			// Backfill state for display/summary purposes.
@@ -179,7 +189,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	// Calculate duration if we have start time.
 	if state != nil && !state.StartedAt.IsZero() {
 		duration := now.Sub(state.StartedAt).Milliseconds()
-		line.DurationMS = &duration
+		durationMSPtr = &duration
 	}
 
 	// Persist to SQLite asynchronously (off request path).
@@ -187,22 +197,19 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	if requestID := logging.GetRequestID(ctx); requestID != "" {
 		metricspersist.Enqueue(metricspersist.MetricRecord{
 			RequestID:    requestID,
-			Provider:     record.Provider,
-			Model:        record.Model,
-			TPS:          line.TPS,
-			TTFT:         line.TTFT,
-			TPOT:         line.TPOT,
-			InputTokens:  line.InputTokens,
-			OutputTokens: line.OutputTokens,
-			TotalTokens:  line.TotalTokens,
-			DurationMS:   line.DurationMS,
-			StatusCode:   line.StatusCode,
-			ErrorInfo:    line.ErrorInfo,
+			Provider:     provider,
+			Model:        model,
+			TPS:          tps,
+			TTFT:         ttft,
+			TPOT:         tpot,
+			InputTokens:  inputTokensPtr,
+			OutputTokens: outputTokensPtr,
+			TotalTokens:  totalTokensPtr,
+			DurationMS:   durationMSPtr,
+			StatusCode:   statusCodePtr,
+			ErrorInfo:    errorInfoPtr,
 		})
 	}
-
-	// Enqueue for async write (non-blocking, drops on full queue).
-	metricslog.Enqueue(line)
 }
 
 func shouldComputeRates(snap RequestStateSnapshot, outputTokens int64, end time.Time) bool {

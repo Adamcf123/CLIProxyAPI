@@ -81,8 +81,8 @@ curl -sS \
 
 
 # Phase 02 指标输出（流式请求期间 stderr 进度行；结束时单行 metrics_summary JSON）
-# 结构化落盘：logs/metrics-YYYY-MM-DD.jsonl（UTC 日期）
-tail -n 5 "logs/metrics-$(date -u +%F).jsonl"
+# Phase 03 持久化：写入 logs/metrics.db（SQLite）
+sqlite3 "logs/metrics.db" "SELECT request_id, provider, model, tps, ttft, tpot, created_at FROM metrics ORDER BY created_at DESC LIMIT 5;"
 
 
 # OpenAI 兼容：Chat Completions（流式）

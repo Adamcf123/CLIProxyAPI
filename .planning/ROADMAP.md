@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Metrics Foundation** - 建立核心指标计算逻辑和数据结构
 - [x] **Phase 2: Metrics Collection** - 集成指标收集到流式响应处理
-- [ ] **Phase 3: Persistence** - SQLite 持久化存储
+- [x] **Phase 3: Persistence** - SQLite 持久化存储
 - [ ] **Phase 4: Query API** - 历史指标查询和分析接口
 
 ## Phase Details
@@ -81,9 +81,9 @@ Plans:
 **Plans**: 3 plans in 3 waves
 
 Plans:
-- [ ] 03-01-PLAN.md — SQLite schema + migrations wiring
-- [ ] 03-02-PLAN.md — Async SQLite writer + MetricsPlugin integration
-- [ ] 03-03-PLAN.md — Retention cleanup + disable JSONL legacy
+- [x] 03-01-PLAN.md — SQLite schema + migrations wiring
+- [x] 03-02-PLAN.md — Async SQLite writer + MetricsPlugin integration
+- [x] 03-03-PLAN.md — Retention cleanup + disable JSONL legacy
 
 ### Phase 4: Query API
 
@@ -115,5 +115,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Metrics Foundation | 4/4 | Complete | 2025-01-29 |
 | 2. Metrics Collection | 4/4 | Complete | 2026-01-29 |
-| 3. Persistence | 0/3 | In progress | - |
+| 3. Persistence | 3/3 | Complete | 2026-01-30 |
 | 4. Query API | 0/3 | Not started | - |
