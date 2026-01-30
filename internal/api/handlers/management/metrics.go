@@ -3,11 +3,14 @@ package management
 import (
 	"context"
 	"database/sql"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
 )
 
 type metricsFilters struct {
@@ -46,6 +49,41 @@ type metricsRow struct {
 	InputTokens  *int64   `json:"input_tokens"`
 	OutputTokens *int64   `json:"output_tokens"`
 	TotalTokens  *int64   `json:"total_tokens"`
+}
+
+type metricsPercentileFloat struct {
+	SampleCount int      `json:"sample_count"`
+	P50         *float64 `json:"p50"`
+	P95         *float64 `json:"p95"`
+	P99         *float64 `json:"p99"`
+}
+
+type metricsPercentileMillis struct {
+	SampleCount int    `json:"sample_count"`
+	P50         *int64 `json:"p50"`
+	P95         *int64 `json:"p95"`
+	P99         *int64 `json:"p99"`
+}
+
+type metricsPercentilesMetrics struct {
+	TPS        metricsPercentileFloat  `json:"tps"`
+	TTFTMillis metricsPercentileMillis `json:"ttft_ms"`
+	TPOTMillis metricsPercentileMillis `json:"tpot_ms"`
+	DurationMS metricsPercentileMillis `json:"duration_ms"`
+}
+
+type metricsPercentilesGroup struct {
+	Provider  string                    `json:"provider"`
+	Model     string                    `json:"model"`
+	Streaming bool                      `json:"streaming"`
+	Count     int                       `json:"count"`
+	Metrics   metricsPercentilesMetrics `json:"metrics"`
+}
+
+type metricsPercentilesResponse struct {
+	Meta    metricsMeta               `json:"meta"`
+	Success []metricsPercentilesGroup `json:"success"`
+	Failure []metricsPercentilesGroup `json:"failure"`
 }
 
 func (h *Handler) GetMetrics(c *gin.Context) {
@@ -147,11 +185,243 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		Filters:       filters,
 	}
 
-	// Aggregation modes are implemented in subsequent plans.
-	c.JSON(http.StatusNotImplemented, metricsEnvelope[any]{
-		Error: "mode not implemented",
-		Meta:  meta,
-	})
+	switch mode {
+	case "percentiles":
+		out, err := h.queryMetricsPercentiles(c.Request.Context(), effectiveFrom, effectiveTo, filters)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, metricsEnvelope[any]{
+				Error: "failed to query metrics",
+				Meta:  meta,
+			})
+			return
+		}
+		out.Meta = meta
+		c.JSON(http.StatusOK, out)
+		return
+	default:
+		c.JSON(http.StatusNotImplemented, metricsEnvelope[any]{
+			Error: "mode not implemented",
+			Meta:  meta,
+		})
+		return
+	}
+}
+
+type metricsPercentilesAgg struct {
+	Count      int
+	TPS        []float64
+	TTFTSec    []float64
+	TPOTSec    []float64
+	DurationMS []float64
+}
+
+type metricsPercentilesKey struct {
+	Provider  string
+	Model     string
+	Streaming bool
+}
+
+func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Time, filters metricsFilters) (metricsPercentilesResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	db, err := h.openMetricsReadDB()
+	if err != nil {
+		// If the DB cannot be opened (e.g., default logs/ path missing in tests),
+		// treat it as "no data" for percentiles mode.
+		msg := err.Error()
+		if strings.Contains(msg, "unable to open database file") || strings.Contains(msg, "no such file or directory") {
+			return metricsPercentilesResponse{}, nil
+		}
+		return metricsPercentilesResponse{}, err
+	}
+
+	q := `SELECT
+		provider,
+		model,
+		streaming,
+		status_code,
+		error_info,
+		tps,
+		ttft,
+		tpot,
+		duration_ms
+	FROM metrics
+	WHERE created_at >= datetime(?) AND created_at < datetime(?)`
+	args := []any{from.Format(time.RFC3339), to.Format(time.RFC3339)}
+
+	if filters.Provider != nil {
+		q += " AND provider = ?"
+		args = append(args, *filters.Provider)
+	}
+	if filters.Model != nil {
+		q += " AND model = ?"
+		args = append(args, *filters.Model)
+	}
+	if filters.Streaming != nil {
+		q += " AND streaming = ?"
+		if *filters.Streaming {
+			args = append(args, int64(1))
+		} else {
+			args = append(args, int64(0))
+		}
+	}
+
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		// When schema is missing (e.g., a fresh DB file without migrations),
+		// treat it as empty result rather than a hard 500.
+		if strings.Contains(err.Error(), "no such table: metrics") {
+			return metricsPercentilesResponse{}, nil
+		}
+		return metricsPercentilesResponse{}, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	successAgg := make(map[metricsPercentilesKey]*metricsPercentilesAgg)
+	failureAgg := make(map[metricsPercentilesKey]*metricsPercentilesAgg)
+
+	for rows.Next() {
+		var (
+			providerVal  string
+			modelVal     string
+			streamingVal int64
+			statusCode   sql.NullInt64
+			errorInfo    sql.NullString
+			tpsVal       sql.NullFloat64
+			ttftVal      sql.NullFloat64
+			tpotVal      sql.NullFloat64
+			durMS        sql.NullInt64
+		)
+		if err := rows.Scan(
+			&providerVal,
+			&modelVal,
+			&streamingVal,
+			&statusCode,
+			&errorInfo,
+			&tpsVal,
+			&ttftVal,
+			&tpotVal,
+			&durMS,
+		); err != nil {
+			return metricsPercentilesResponse{}, err
+		}
+
+		key := metricsPercentilesKey{Provider: providerVal, Model: modelVal, Streaming: streamingVal != 0}
+		isSuccess := statusCode.Valid && statusCode.Int64 >= 200 && statusCode.Int64 < 300
+		if isSuccess {
+			if errorInfo.Valid && strings.TrimSpace(errorInfo.String) != "" {
+				isSuccess = false
+			}
+		}
+
+		target := failureAgg
+		if isSuccess {
+			target = successAgg
+		}
+		agg := target[key]
+		if agg == nil {
+			agg = &metricsPercentilesAgg{}
+			target[key] = agg
+		}
+		agg.Count++
+		if tpsVal.Valid {
+			agg.TPS = append(agg.TPS, tpsVal.Float64)
+		}
+		if ttftVal.Valid {
+			agg.TTFTSec = append(agg.TTFTSec, ttftVal.Float64)
+		}
+		if tpotVal.Valid {
+			agg.TPOTSec = append(agg.TPOTSec, tpotVal.Float64)
+		}
+		if durMS.Valid {
+			agg.DurationMS = append(agg.DurationMS, float64(durMS.Int64))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return metricsPercentilesResponse{}, err
+	}
+
+	buildGroups := func(m map[metricsPercentilesKey]*metricsPercentilesAgg) []metricsPercentilesGroup {
+		out := make([]metricsPercentilesGroup, 0, len(m))
+		for key, agg := range m {
+			g := metricsPercentilesGroup{
+				Provider:  key.Provider,
+				Model:     key.Model,
+				Streaming: key.Streaming,
+				Count:     agg.Count,
+				Metrics:   buildMetricsPercentiles(agg),
+			}
+			out = append(out, g)
+		}
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Provider != out[j].Provider {
+				return out[i].Provider < out[j].Provider
+			}
+			if out[i].Model != out[j].Model {
+				return out[i].Model < out[j].Model
+			}
+			if out[i].Streaming != out[j].Streaming {
+				return !out[i].Streaming && out[j].Streaming
+			}
+			return false
+		})
+		return out
+	}
+
+	return metricsPercentilesResponse{
+		Success: buildGroups(successAgg),
+		Failure: buildGroups(failureAgg),
+	}, nil
+}
+
+func buildMetricsPercentiles(agg *metricsPercentilesAgg) metricsPercentilesMetrics {
+	var out metricsPercentilesMetrics
+	if agg == nil {
+		return out
+	}
+
+	out.TPS.SampleCount = len(agg.TPS)
+	if p50, p95, p99, ok := metrics.CalculateP50P95P99(agg.TPS); ok {
+		out.TPS.P50 = &p50
+		out.TPS.P95 = &p95
+		out.TPS.P99 = &p99
+	}
+
+	out.TTFTMillis.SampleCount = len(agg.TTFTSec)
+	if p50, p95, p99, ok := metrics.CalculateP50P95P99(agg.TTFTSec); ok {
+		p50ms := secondsToMillisInt(p50)
+		p95ms := secondsToMillisInt(p95)
+		p99ms := secondsToMillisInt(p99)
+		out.TTFTMillis.P50 = &p50ms
+		out.TTFTMillis.P95 = &p95ms
+		out.TTFTMillis.P99 = &p99ms
+	}
+
+	out.TPOTMillis.SampleCount = len(agg.TPOTSec)
+	if p50, p95, p99, ok := metrics.CalculateP50P95P99(agg.TPOTSec); ok {
+		p50ms := secondsToMillisInt(p50)
+		p95ms := secondsToMillisInt(p95)
+		p99ms := secondsToMillisInt(p99)
+		out.TPOTMillis.P50 = &p50ms
+		out.TPOTMillis.P95 = &p95ms
+		out.TPOTMillis.P99 = &p99ms
+	}
+
+	out.DurationMS.SampleCount = len(agg.DurationMS)
+	if p50, p95, p99, ok := metrics.CalculateP50P95P99(agg.DurationMS); ok {
+		p50ms := int64(math.Round(p50))
+		p95ms := int64(math.Round(p95))
+		p99ms := int64(math.Round(p99))
+		out.DurationMS.P50 = &p50ms
+		out.DurationMS.P95 = &p95ms
+		out.DurationMS.P99 = &p99ms
+	}
+
+	return out
 }
 
 func parseMetricsFilters(provider, model, streamingRaw string) (metricsFilters, error) {
