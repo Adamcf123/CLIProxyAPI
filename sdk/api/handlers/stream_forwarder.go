@@ -73,7 +73,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 	if len(opts.PrefetchedChunk) > 0 {
 		writeChunk(opts.PrefetchedChunk)
 		flusher.Flush()
-		metricsruntime.MaybeRecordFirstToken(c, opts.PrefetchedChunk, time.Now())
+		metricsruntime.MaybeRecordFirstContentToken(c, opts.PrefetchedChunk, time.Now())
 	}
 
 	var terminalErr *interfaces.ErrorMessage
@@ -111,7 +111,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 			}
 			writeChunk(chunk)
 			flusher.Flush()
-			metricsruntime.MaybeRecordFirstToken(c, chunk, time.Now())
+			metricsruntime.MaybeRecordFirstContentToken(c, chunk, time.Now())
 		case errMsg, ok := <-errs:
 			if !ok {
 				continue
