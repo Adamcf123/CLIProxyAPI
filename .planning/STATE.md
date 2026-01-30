@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Persistence
+**Current focus:** Query API
 
 ## Current Position
 
