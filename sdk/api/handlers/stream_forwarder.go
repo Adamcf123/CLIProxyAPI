@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -115,7 +116,32 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 	for {
 		select {
 		case <-c.Request.Context().Done():
-			cancel(c.Request.Context().Err())
+			// Hard rule: upstream explicit errors (terminal streaming errors) must win over
+			// conservative canceled. Probe errs channel before marking canceled.
+			select {
+			case errMsg, ok := <-errs:
+				if ok && errMsg != nil {
+					maybeSetStreamingTerminalLastError(c, errMsg)
+					cancel(errMsg.Error)
+					return
+				}
+			default:
+			}
+
+			ctxErr := c.Request.Context().Err()
+			if errors.Is(ctxErr, context.DeadlineExceeded) {
+				if state, ok := metricsruntime.GetRequestState(c); ok && state != nil {
+					state.SetLastError(ctxErr)
+				}
+				cancel(ctxErr)
+				return
+			}
+			if errors.Is(ctxErr, context.Canceled) {
+				if state, ok := metricsruntime.GetRequestState(c); ok && state != nil {
+					state.MarkClientCanceled()
+				}
+			}
+			cancel(ctxErr)
 			return
 		case chunk, ok := <-data:
 			if !ok {
