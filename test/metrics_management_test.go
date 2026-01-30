@@ -57,6 +57,7 @@ type percentileMillis struct {
 type percentilesResponse struct {
 	Meta struct {
 		Mode          string  `json:"mode"`
+		CanceledCount *int    `json:"canceled_count"`
 		RequestedFrom *string `json:"requested_from"`
 		RequestedTo   *string `json:"requested_to"`
 		EffectiveFrom string  `json:"effective_from"`
@@ -268,6 +269,9 @@ func seedPercentilesMetricsDB(t *testing.T, dbPath string) {
 		{id: "s1", status: 200, errInfo: nil, tps: 10.0, ttft: 0.0016, tpot: 0.01, duration: 1000, createdAt: "2026-01-01T00:10:00Z"},
 		{id: "s2", status: 200, errInfo: nil, tps: nil, ttft: nil, tpot: 0.02, duration: 2000, createdAt: "2026-01-01T00:20:00Z"},
 		{id: "s3", status: 204, errInfo: nil, tps: 30.0, ttft: nil, tpot: nil, duration: 3000, createdAt: "2026-01-01T00:30:00Z"},
+		// canceled rows are excluded from percentiles but must be counted in meta.canceled_count.
+		// Use extreme values so inclusion would visibly change percentiles.
+		{id: "c1", status: 499, errInfo: nil, tps: 1000.0, ttft: 9.9, tpot: 9.9, duration: 999999, createdAt: "2026-01-01T00:35:00Z"},
 		// failure rows (count=2)
 		{id: "f1", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 4000, createdAt: "2026-01-01T00:40:00Z"},
 		{id: "f2", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: 5000, createdAt: "2026-01-01T00:50:00Z"},
@@ -711,6 +715,9 @@ func TestManagementMetrics_PercentilesMode(t *testing.T) {
 	}
 	if resp.Meta.Mode != "percentiles" {
 		t.Fatalf("meta.mode: got %q want %q", resp.Meta.Mode, "percentiles")
+	}
+	if resp.Meta.CanceledCount == nil || *resp.Meta.CanceledCount != 1 {
+		t.Fatalf("meta.canceled_count: got=%v want=%d", resp.Meta.CanceledCount, 1)
 	}
 	if resp.Meta.Filters.Streaming == nil || *resp.Meta.Filters.Streaming != true {
 		t.Fatalf("meta.filters.streaming: got=%v want=true", resp.Meta.Filters.Streaming)
