@@ -315,6 +315,8 @@ func seedBucketsMetricsDB(t *testing.T, dbPath string) {
 		// Only the middle bucket (00:10-00:15) has data.
 		{id: "s_mid", status: 200, errInfo: nil, tps: 10.0, ttft: 0.0016, tpot: 0.01, duration: 1234, createdAt: "2026-01-01T00:10:30Z"},
 		{id: "f_mid", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 2345, createdAt: "2026-01-01T00:10:45Z"},
+		// Streaming failures can still have a 200 status_code, but are classified as failure when error_info is non-empty.
+		{id: "f_mid_200_err", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: nil, createdAt: "2026-01-01T00:10:50Z"},
 	}
 
 	for _, r := range rows {
