@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Metrics Foundation** - 建立核心指标计算逻辑和数据结构
 - [x] **Phase 2: Metrics Collection** - 集成指标收集到流式响应处理
 - [x] **Phase 3: Persistence** - SQLite 持久化存储
-- [ ] **Phase 4: Query API** - 历史指标查询和分析接口
+- [x] **Phase 4: Query API** - 历史指标查询和分析接口
 
 ## Phase Details
 
@@ -102,10 +102,10 @@ Plans:
 **Plans**: 4 plans in 4 waves
 
 Plans:
-- [ ] 04-01-PLAN.md — 补齐 streaming 维度（schema + writer 入库）
-- [ ] 04-02-PLAN.md — 上线 GET /v0/management/metrics（request_id 查询 + 校验 + meta）
-- [ ] 04-03-PLAN.md — 实现 mode=percentiles（p50/p95/p99，复用线性插值语义）
-- [ ] 04-04-PLAN.md — 实现 mode=buckets（固定粒度 + UTC 对齐 + 空 bucket 回填）
+- [x] 04-01-PLAN.md — 补齐 streaming 维度（schema + writer 入库）
+- [x] 04-02-PLAN.md — 上线 GET /v0/management/metrics（request_id 查询 + 校验 + meta）
+- [x] 04-03-PLAN.md — 实现 mode=percentiles（p50/p95/p99，复用线性插值语义）
+- [x] 04-04-PLAN.md — 实现 mode=buckets（固定粒度 + UTC 对齐 + 空 bucket 回填）
 
 ## Progress
 
@@ -117,4 +117,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Metrics Foundation | 4/4 | Complete | 2025-01-29 |
 | 2. Metrics Collection | 4/4 | Complete | 2026-01-29 |
 | 3. Persistence | 3/3 | Complete | 2026-01-30 |
-| 4. Query API | 0/4 | Not started | - |
+| 4. Query API | 4/4 | Complete | 2026-01-30 |
