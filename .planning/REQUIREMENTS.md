@@ -15,7 +15,7 @@
 ### Display（展示）
 
 - [x] **DISP-01**: 响应结束后显示本次请求的指标汇总
-- [ ] **DISP-02**: 将指标写入结构化日志
+- [x] **DISP-02**: 将指标写入结构化日志
 
 ### Storage（存储）
 
@@ -56,7 +56,7 @@
 | METR-03 | Phase 1 | Pending |
 | METR-04 | Phase 1 | Pending |
 | DISP-01 | Phase 2 | Complete |
-| DISP-02 | Phase 2 | Pending |
+| DISP-02 | Phase 2 | Complete |
 | STOR-01 | Phase 3 | Complete |
 | STOR-02 | Phase 4 | Complete |
 | STOR-03 | Phase 4 | Complete |
@@ -69,4 +69,4 @@
 
 ---
 *Requirements defined: 2025-01-29*
-*Last updated: 2026-01-30 after phase 5 verification*
+*Last updated: 2026-01-30 after phase 6 verification*
