@@ -31,6 +31,8 @@ type metricsResponse struct {
 	Data *struct {
 		RequestID  string `json:"request_id"`
 		Streaming  bool   `json:"streaming"`
+		Outcome    string `json:"outcome"`
+		Status     string `json:"status"`
 		TTFTMillis *int64 `json:"ttft_ms"`
 		TPOTMillis *int64 `json:"tpot_ms"`
 		CreatedAt  string `json:"created_at"`
@@ -55,6 +57,7 @@ type percentileMillis struct {
 type percentilesResponse struct {
 	Meta struct {
 		Mode          string  `json:"mode"`
+		CanceledCount *int    `json:"canceled_count"`
 		RequestedFrom *string `json:"requested_from"`
 		RequestedTo   *string `json:"requested_to"`
 		EffectiveFrom string  `json:"effective_from"`
@@ -112,9 +115,10 @@ type bucketsResponse struct {
 		Model     string `json:"model"`
 		Streaming bool   `json:"streaming"`
 		Buckets   []struct {
-			Start   string `json:"start"`
-			Count   int    `json:"count"`
-			Metrics struct {
+			Start         string `json:"start"`
+			Count         int    `json:"count"`
+			CanceledCount int    `json:"canceled_count"`
+			Metrics       struct {
 				TPSAvg        *float64 `json:"tps_avg"`
 				TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
 				TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
@@ -127,9 +131,10 @@ type bucketsResponse struct {
 		Model     string `json:"model"`
 		Streaming bool   `json:"streaming"`
 		Buckets   []struct {
-			Start   string `json:"start"`
-			Count   int    `json:"count"`
-			Metrics struct {
+			Start         string `json:"start"`
+			Count         int    `json:"count"`
+			CanceledCount int    `json:"canceled_count"`
+			Metrics       struct {
 				TPSAvg        *float64 `json:"tps_avg"`
 				TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
 				TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
@@ -180,7 +185,7 @@ func seedMetricsDB(t *testing.T, dbPath string) {
 
 	_, err = db.Exec(
 		insert,
-		"req_1",
+		"0000000000000001",
 		"openai",
 		"gpt-4o",
 		1,
@@ -197,6 +202,28 @@ func seedMetricsDB(t *testing.T, dbPath string) {
 	)
 	if err != nil {
 		t.Fatalf("insert metrics row: %v", err)
+	}
+
+	// canceled row: status_code=499 must be classified as outcome=canceled and MUST NOT set envelope.error.
+	_, err = db.Exec(
+		insert,
+		"00000000000000c1",
+		"openai",
+		"gpt-4o",
+		1,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		9999,
+		499,
+		nil,
+		"2026-01-01T00:01:00Z",
+	)
+	if err != nil {
+		t.Fatalf("insert canceled metrics row: %v", err)
 	}
 }
 
@@ -241,12 +268,15 @@ func seedPercentilesMetricsDB(t *testing.T, dbPath string) {
 		createdAt string
 	}{
 		// success rows (count=3)
-		{id: "s1", status: 200, errInfo: nil, tps: 10.0, ttft: 0.0016, tpot: 0.01, duration: 1000, createdAt: "2026-01-01T00:10:00Z"},
-		{id: "s2", status: 200, errInfo: nil, tps: nil, ttft: nil, tpot: 0.02, duration: 2000, createdAt: "2026-01-01T00:20:00Z"},
-		{id: "s3", status: 204, errInfo: nil, tps: 30.0, ttft: nil, tpot: nil, duration: 3000, createdAt: "2026-01-01T00:30:00Z"},
+		{id: "1111111111111111", status: 200, errInfo: nil, tps: 10.0, ttft: 0.0016, tpot: 0.01, duration: 1000, createdAt: "2026-01-01T00:10:00Z"},
+		{id: "2222222222222222", status: 200, errInfo: nil, tps: nil, ttft: nil, tpot: 0.02, duration: 2000, createdAt: "2026-01-01T00:20:00Z"},
+		{id: "3333333333333333", status: 204, errInfo: nil, tps: 30.0, ttft: nil, tpot: nil, duration: 3000, createdAt: "2026-01-01T00:30:00Z"},
+		// canceled rows are excluded from percentiles but must be counted in meta.canceled_count.
+		// Use extreme values so inclusion would visibly change percentiles.
+		{id: "cccccccccccccccc", status: 499, errInfo: nil, tps: 1000.0, ttft: 9.9, tpot: 9.9, duration: 999999, createdAt: "2026-01-01T00:35:00Z"},
 		// failure rows (count=2)
-		{id: "f1", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 4000, createdAt: "2026-01-01T00:40:00Z"},
-		{id: "f2", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: 5000, createdAt: "2026-01-01T00:50:00Z"},
+		{id: "4444444444444444", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 4000, createdAt: "2026-01-01T00:40:00Z"},
+		{id: "5555555555555555", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: 5000, createdAt: "2026-01-01T00:50:00Z"},
 	}
 
 	for _, r := range rows {
@@ -313,10 +343,12 @@ func seedBucketsMetricsDB(t *testing.T, dbPath string) {
 		createdAt string
 	}{
 		// Only the middle bucket (00:10-00:15) has data.
-		{id: "s_mid", status: 200, errInfo: nil, tps: 10.0, ttft: 0.0016, tpot: 0.01, duration: 1234, createdAt: "2026-01-01T00:10:30Z"},
-		{id: "f_mid", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 2345, createdAt: "2026-01-01T00:10:45Z"},
+		{id: "6666666666666666", status: 200, errInfo: nil, tps: 10.0, ttft: 0.0016, tpot: 0.01, duration: 1234, createdAt: "2026-01-01T00:10:30Z"},
+		{id: "7777777777777777", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 2345, createdAt: "2026-01-01T00:10:45Z"},
 		// Streaming failures can still have a 200 status_code, but are classified as failure when error_info is non-empty.
-		{id: "f_mid_200_err", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: nil, createdAt: "2026-01-01T00:10:50Z"},
+		{id: "8888888888888888", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: nil, createdAt: "2026-01-01T00:10:50Z"},
+		// canceled rows should not pollute bucket metrics, but must be counted in canceled_count.
+		{id: "9999999999999999", status: 499, errInfo: nil, tps: 999.0, ttft: 9.9, tpot: 9.9, duration: 999999, createdAt: "2026-01-01T00:10:55Z"},
 	}
 
 	for _, r := range rows {
@@ -399,7 +431,7 @@ func TestManagementMetrics_RequestIDFound(t *testing.T) {
 	h.SetNowUTC(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	r := setupMetricsRouter(t, h)
-	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=0000000000000001", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -417,8 +449,8 @@ func TestManagementMetrics_RequestIDFound(t *testing.T) {
 	if resp.Data == nil {
 		t.Fatalf("expected data")
 	}
-	if resp.Data.RequestID != "req_1" {
-		t.Fatalf("data.request_id: got %q want %q", resp.Data.RequestID, "req_1")
+	if resp.Data.RequestID != "0000000000000001" {
+		t.Fatalf("data.request_id: got %q want %q", resp.Data.RequestID, "0000000000000001")
 	}
 	if resp.Data.Streaming != true {
 		t.Fatalf("data.streaming: got %t want %t", resp.Data.Streaming, true)
@@ -428,6 +460,46 @@ func TestManagementMetrics_RequestIDFound(t *testing.T) {
 	}
 	if resp.Data.TPOTMillis == nil || *resp.Data.TPOTMillis != 5 {
 		t.Fatalf("data.tpot_ms: got=%v want=%d", resp.Data.TPOTMillis, 5)
+	}
+	if resp.Data.Outcome != "success" {
+		t.Fatalf("data.outcome: got %q want %q", resp.Data.Outcome, "success")
+	}
+	if resp.Data.Status != "success" {
+		t.Fatalf("data.status: got %q want %q", resp.Data.Status, "success")
+	}
+}
+
+func TestManagementMetrics_RequestIDCanceledHasNoEnvelopeError(t *testing.T) {
+	cfg := &config.Config{}
+	h := management.NewHandler(cfg, "", nil)
+
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	seedMetricsDB(t, dbPath)
+	h.SetMetricsDBPath(dbPath)
+	h.SetNowUTC(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+
+	r := setupMetricsRouter(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=00000000000000c1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	resp := decodeJSONMap(t, w.Body.Bytes())
+	if _, ok := resp["error"]; ok {
+		t.Fatalf("expected envelope.error omitted for canceled request")
+	}
+	data := mustMap(t, resp["data"], "data")
+	if data["outcome"] != "canceled" {
+		t.Fatalf("data.outcome: got=%v want=%q", data["outcome"], "canceled")
+	}
+	if data["status"] != "canceled" {
+		t.Fatalf("data.status: got=%v want=%q", data["status"], "canceled")
+	}
+	if v, ok := data["error_info"]; !ok || v != nil {
+		t.Fatalf("data.error_info: expected null, got=%v (ok=%t)", v, ok)
 	}
 }
 
@@ -443,7 +515,7 @@ func TestManagementMetrics_PersistenceMetaOmittedWhenNotDegraded(t *testing.T) {
 	h.SetNowUTC(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	r := setupMetricsRouter(t, h)
-	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=0000000000000001", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -477,7 +549,7 @@ func TestManagementMetrics_PersistenceMetaMinimalFieldsWhenDegraded(t *testing.T
 	h.SetNowUTC(func() time.Time { return time.Date(2026, 1, 1, 0, 10, 0, 0, time.UTC) })
 
 	r := setupMetricsRouter(t, h)
-	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=0000000000000001", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -501,7 +573,7 @@ func TestManagementMetrics_PersistenceMetaMinimalFieldsWhenDegraded(t *testing.T
 
 	// Security boundary: persistence meta MUST NOT embed request IDs, SQL errors, or file paths.
 	if v, ok := persist["last_drop_reason"]; ok {
-		if v != string(metricspersist.DropReasonQueueFull) && v != string(metricspersist.DropReasonWriterNotStarted) && v != string(metricspersist.DropReasonInsertFailure) {
+		if v != string(metricspersist.DropReasonQueueFull) && v != string(metricspersist.DropReasonWriterNotStarted) && v != string(metricspersist.DropReasonInsertFailure) && v != string(metricspersist.DropReasonRequestIDConflict) {
 			t.Fatalf("persistence.last_drop_reason: got=%v expected stable enum", v)
 		}
 	}
@@ -516,7 +588,7 @@ func TestManagementMetrics_RequestIDNotFound(t *testing.T) {
 	h.SetMetricsDBPath(dbPath)
 
 	r := setupMetricsRouter(t, h)
-	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=missing", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=ffffffffffffffff", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -543,21 +615,21 @@ func TestManagementMetrics_StreaminBoolValidation(t *testing.T) {
 
 	r := setupMetricsRouter(t, h)
 
-	bad := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_1&streaming=maybe", nil)
+	bad := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=0000000000000001&streaming=maybe", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, bad)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
 	}
 
-	good := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_1&streaming=true", nil)
+	good := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=0000000000000001&streaming=true", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, good)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
 	}
 
-	good = httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_1&streaming=1", nil)
+	good = httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=0000000000000001&streaming=1", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, good)
 	if w.Code != http.StatusOK {
@@ -647,6 +719,9 @@ func TestManagementMetrics_PercentilesMode(t *testing.T) {
 	}
 	if resp.Meta.Mode != "percentiles" {
 		t.Fatalf("meta.mode: got %q want %q", resp.Meta.Mode, "percentiles")
+	}
+	if resp.Meta.CanceledCount == nil || *resp.Meta.CanceledCount != 1 {
+		t.Fatalf("meta.canceled_count: got=%v want=%d", resp.Meta.CanceledCount, 1)
 	}
 	if resp.Meta.Filters.Streaming == nil || *resp.Meta.Filters.Streaming != true {
 		t.Fatalf("meta.filters.streaming: got=%v want=true", resp.Meta.Filters.Streaming)
@@ -771,6 +846,9 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if s.Buckets[0].Count != 0 {
 		t.Fatalf("empty bucket count: got %d want %d", s.Buckets[0].Count, 0)
 	}
+	if s.Buckets[0].CanceledCount != 0 {
+		t.Fatalf("empty bucket canceled_count: got %d want %d", s.Buckets[0].CanceledCount, 0)
+	}
 	if s.Buckets[0].Metrics.TTFTMillisAvg != nil || s.Buckets[0].Metrics.TPOTMillisAvg != nil || s.Buckets[0].Metrics.DurationMSAvg != nil {
 		t.Fatalf("empty bucket metrics expected null")
 	}
@@ -781,6 +859,9 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	}
 	if s.Buckets[2].Count != 1 {
 		t.Fatalf("data bucket count: got %d want %d", s.Buckets[2].Count, 1)
+	}
+	if s.Buckets[2].CanceledCount != 1 {
+		t.Fatalf("data bucket canceled_count: got %d want %d", s.Buckets[2].CanceledCount, 1)
 	}
 	if s.Buckets[2].Metrics.TTFTMillisAvg == nil || *s.Buckets[2].Metrics.TTFTMillisAvg != 2 {
 		t.Fatalf("ttft_ms_avg: got=%v want=%d", s.Buckets[2].Metrics.TTFTMillisAvg, 2)
@@ -796,6 +877,9 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if f.Buckets[0].Count != 0 {
 		t.Fatalf("failure empty bucket count: got %d want %d", f.Buckets[0].Count, 0)
 	}
+	if f.Buckets[0].CanceledCount != 0 {
+		t.Fatalf("failure empty bucket canceled_count: got %d want %d", f.Buckets[0].CanceledCount, 0)
+	}
 	if f.Buckets[0].Metrics.TTFTMillisAvg != nil || f.Buckets[0].Metrics.TPOTMillisAvg != nil || f.Buckets[0].Metrics.DurationMSAvg != nil {
 		t.Fatalf("failure empty bucket metrics expected null")
 	}
@@ -806,5 +890,12 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	}
 	if f.Buckets[2].Count != 2 {
 		t.Fatalf("failure data bucket count: got %d want %d", f.Buckets[2].Count, 2)
+	}
+	if f.Buckets[2].CanceledCount != 1 {
+		t.Fatalf("failure data bucket canceled_count: got %d want %d", f.Buckets[2].CanceledCount, 1)
+	}
+	total := s.Buckets[2].Count + f.Buckets[2].Count + s.Buckets[2].CanceledCount
+	if total != 4 {
+		t.Fatalf("total count mismatch: got=%d want=%d", total, 4)
 	}
 }

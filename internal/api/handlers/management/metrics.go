@@ -29,6 +29,10 @@ type metricsMeta struct {
 	EffectiveTo   string         `json:"effective_to"`
 	Filters       metricsFilters `json:"filters"`
 
+	// CanceledCount is emitted only for mode=percentiles to make it explicit
+	// that canceled samples (status_code=499) were excluded from percentile math.
+	CanceledCount *int `json:"canceled_count,omitempty"`
+
 	// Persistence is emitted only when best-effort persistence is degraded.
 	Persistence *metricsPersistenceMeta `json:"persistence,omitempty"`
 }
@@ -46,11 +50,34 @@ type metricsEnvelope[T any] struct {
 	Error string      `json:"error,omitempty"`
 }
 
+type metricsOutcome string
+
+const (
+	metricsOutcomeSuccess  metricsOutcome = "success"
+	metricsOutcomeFailure  metricsOutcome = "failure"
+	metricsOutcomeCanceled metricsOutcome = "canceled"
+)
+
+func classifyMetricsOutcome(statusCode *int64, errorInfo *string) metricsOutcome {
+	// Hard-cutover contract: status_code=499 is the canonical canceled signal.
+	if statusCode != nil && *statusCode == 499 {
+		return metricsOutcomeCanceled
+	}
+	if statusCode != nil && *statusCode >= 200 && *statusCode < 300 {
+		if errorInfo == nil || strings.TrimSpace(*errorInfo) == "" {
+			return metricsOutcomeSuccess
+		}
+	}
+	return metricsOutcomeFailure
+}
+
 type metricsRow struct {
 	RequestID    string   `json:"request_id"`
 	Provider     string   `json:"provider"`
 	Model        string   `json:"model"`
 	Streaming    bool     `json:"streaming"`
+	Outcome      string   `json:"outcome"`
+	Status       string   `json:"status"`
 	StatusCode   *int64   `json:"status_code"`
 	ErrorInfo    *string  `json:"error_info"`
 	CreatedAt    string   `json:"created_at"`
@@ -106,9 +133,10 @@ type metricsBucketsMetrics struct {
 }
 
 type metricsBucket struct {
-	Start   string                `json:"start"`
-	Count   int                   `json:"count"`
-	Metrics metricsBucketsMetrics `json:"metrics"`
+	Start         string                `json:"start"`
+	Count         int                   `json:"count"`
+	CanceledCount int                   `json:"canceled_count"`
+	Metrics       metricsBucketsMetrics `json:"metrics"`
 }
 
 type metricsBucketsGroup struct {
@@ -232,7 +260,7 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 
 	switch mode {
 	case "percentiles":
-		out, err := h.queryMetricsPercentiles(c.Request.Context(), effectiveFrom, effectiveTo, filters)
+		out, canceledCount, err := h.queryMetricsPercentiles(c.Request.Context(), effectiveFrom, effectiveTo, filters)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, metricsEnvelope[any]{
 				Error: "failed to query metrics",
@@ -240,6 +268,8 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 			})
 			return
 		}
+		cc := canceledCount
+		meta.CanceledCount = &cc
 		out.Meta = meta
 		c.JSON(http.StatusOK, out)
 		return
@@ -278,6 +308,8 @@ func (h *Handler) attachPersistenceMeta(meta *metricsMeta) {
 	if h == nil || meta == nil {
 		return
 	}
+	// Persistence meta is a thin projection of the persistence health source.
+	// New stable DropReason values (e.g. request_id_conflict) automatically flow through.
 	fn := h.persistenceHealth
 	if fn == nil {
 		return
@@ -361,12 +393,14 @@ type metricsPercentilesKey struct {
 	Streaming bool
 }
 
-func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Time, filters metricsFilters) (metricsPercentilesResponse, error) {
+func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Time, filters metricsFilters) (metricsPercentilesResponse, int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	canceledCount := 0
 
 	db, err := h.openMetricsReadDB()
 	if err != nil {
@@ -374,9 +408,9 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		// treat it as "no data" for percentiles mode.
 		msg := err.Error()
 		if strings.Contains(msg, "unable to open database file") || strings.Contains(msg, "no such file or directory") {
-			return metricsPercentilesResponse{}, nil
+			return metricsPercentilesResponse{}, canceledCount, nil
 		}
-		return metricsPercentilesResponse{}, err
+		return metricsPercentilesResponse{}, canceledCount, err
 	}
 
 	q := `SELECT
@@ -415,9 +449,9 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		// When schema is missing (e.g., a fresh DB file without migrations),
 		// treat it as empty result rather than a hard 500.
 		if strings.Contains(err.Error(), "no such table: metrics") {
-			return metricsPercentilesResponse{}, nil
+			return metricsPercentilesResponse{}, canceledCount, nil
 		}
-		return metricsPercentilesResponse{}, err
+		return metricsPercentilesResponse{}, canceledCount, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -447,19 +481,28 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 			&tpotVal,
 			&durMS,
 		); err != nil {
-			return metricsPercentilesResponse{}, err
+			return metricsPercentilesResponse{}, canceledCount, err
+		}
+
+		var statusCodePtr *int64
+		if statusCode.Valid {
+			v := statusCode.Int64
+			statusCodePtr = &v
+		}
+		var errorInfoPtr *string
+		if errorInfo.Valid {
+			s := errorInfo.String
+			errorInfoPtr = &s
+		}
+		outcome := classifyMetricsOutcome(statusCodePtr, errorInfoPtr)
+		if outcome == metricsOutcomeCanceled {
+			canceledCount++
+			continue
 		}
 
 		key := metricsPercentilesKey{Provider: providerVal, Model: modelVal, Streaming: streamingVal != 0}
-		isSuccess := statusCode.Valid && statusCode.Int64 >= 200 && statusCode.Int64 < 300
-		if isSuccess {
-			if errorInfo.Valid && strings.TrimSpace(errorInfo.String) != "" {
-				isSuccess = false
-			}
-		}
-
 		target := failureAgg
-		if isSuccess {
+		if outcome == metricsOutcomeSuccess {
 			target = successAgg
 		}
 		agg := target[key]
@@ -482,7 +525,7 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return metricsPercentilesResponse{}, err
+		return metricsPercentilesResponse{}, canceledCount, err
 	}
 
 	buildGroups := func(m map[metricsPercentilesKey]*metricsPercentilesAgg) []metricsPercentilesGroup {
@@ -515,7 +558,7 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 	return metricsPercentilesResponse{
 		Success: buildGroups(successAgg),
 		Failure: buildGroups(failureAgg),
-	}, nil
+	}, canceledCount, nil
 }
 
 func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, bucket time.Duration, filters metricsFilters) (metricsBucketsResponse, error) {
@@ -543,7 +586,7 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		return metricsBucketsResponse{}, errBadRequest("invalid bucket")
 	}
 
-	const successFlagCase = "CASE WHEN status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN 1 ELSE 0 END"
+	const successFlagCase = "CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN 1 ELSE 0 END"
 	q := "SELECT " +
 		"provider, " +
 		"model, " +
@@ -556,7 +599,7 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		"AVG(tpot) AS tpot_avg, " +
 		"AVG(duration_ms) AS duration_ms_avg " +
 		"FROM metrics " +
-		"WHERE unixepoch(created_at) >= unixepoch(?) AND unixepoch(created_at) < unixepoch(?)"
+		"WHERE unixepoch(created_at) >= unixepoch(?) AND unixepoch(created_at) < unixepoch(?) AND (status_code IS NULL OR status_code != 499)"
 
 	args := []any{bucketSeconds, bucketSeconds, from.Format(time.RFC3339), to.Format(time.RFC3339)}
 	if filters.Provider != nil {
@@ -661,25 +704,102 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		return metricsBucketsResponse{}, err
 	}
 
+	// canceled rows: compute per-bucket canceled_count separately so canceled does not
+	// pollute success/failure averages and counts.
+	canceledAgg := make(map[metricsPercentilesKey]map[int64]int)
+	qCanceled := "SELECT " +
+		"provider, " +
+		"model, " +
+		"streaming, " +
+		"((unixepoch(created_at) / ?) * ?) AS bucket_start, " +
+		"COUNT(*) AS canceled_count " +
+		"FROM metrics " +
+		"WHERE unixepoch(created_at) >= unixepoch(?) AND unixepoch(created_at) < unixepoch(?) AND status_code = 499"
+	canceledArgs := []any{bucketSeconds, bucketSeconds, from.Format(time.RFC3339), to.Format(time.RFC3339)}
+	if filters.Provider != nil {
+		qCanceled += " AND provider = ?"
+		canceledArgs = append(canceledArgs, *filters.Provider)
+	}
+	if filters.Model != nil {
+		qCanceled += " AND model = ?"
+		canceledArgs = append(canceledArgs, *filters.Model)
+	}
+	if filters.Streaming != nil {
+		qCanceled += " AND streaming = ?"
+		if *filters.Streaming {
+			canceledArgs = append(canceledArgs, int64(1))
+		} else {
+			canceledArgs = append(canceledArgs, int64(0))
+		}
+	}
+	qCanceled += " GROUP BY provider, model, streaming, bucket_start"
+
+	canceledRows, err := db.QueryContext(ctx, qCanceled, canceledArgs...)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table: metrics") {
+			return metricsBucketsResponse{}, nil
+		}
+		return metricsBucketsResponse{}, err
+	}
+	defer func() { _ = canceledRows.Close() }()
+
+	for canceledRows.Next() {
+		var (
+			providerVal  string
+			modelVal     string
+			streamingVal int64
+			bucketStart  int64
+			countVal     int64
+		)
+		if err := canceledRows.Scan(&providerVal, &modelVal, &streamingVal, &bucketStart, &countVal); err != nil {
+			return metricsBucketsResponse{}, err
+		}
+		key := metricsPercentilesKey{Provider: providerVal, Model: modelVal, Streaming: streamingVal != 0}
+		m := canceledAgg[key]
+		if m == nil {
+			m = make(map[int64]int)
+			canceledAgg[key] = m
+		}
+		m[bucketStart] = int(countVal)
+	}
+	if err := canceledRows.Err(); err != nil {
+		return metricsBucketsResponse{}, err
+	}
+
+	// If the time range has only canceled rows for a key, ensure that key is still
+	// present in at least one output group so users can observe canceled_count.
+	for key := range canceledAgg {
+		if successAgg[key] == nil && failureAgg[key] == nil {
+			failureAgg[key] = make(map[int64]bucketAgg)
+		}
+	}
+
 	buildGroups := func(groups map[metricsPercentilesKey]map[int64]bucketAgg) []metricsBucketsGroup {
 		out := make([]metricsBucketsGroup, 0, len(groups))
 		for key, byBucket := range groups {
+			canceledByBucket := canceledAgg[key]
 			bucketsOut := make([]metricsBucket, 0, len(axisStarts))
 			for _, start := range axisStarts {
 				startSec := start.Unix()
+				canceledCount := 0
+				if canceledByBucket != nil {
+					canceledCount = canceledByBucket[startSec]
+				}
 				agg, ok := byBucket[startSec]
 				if !ok {
 					bucketsOut = append(bucketsOut, metricsBucket{
-						Start:   start.Format(time.RFC3339),
-						Count:   0,
-						Metrics: metricsBucketsMetrics{},
+						Start:         start.Format(time.RFC3339),
+						Count:         0,
+						CanceledCount: canceledCount,
+						Metrics:       metricsBucketsMetrics{},
 					})
 					continue
 				}
 				bucketsOut = append(bucketsOut, metricsBucket{
-					Start:   start.Format(time.RFC3339),
-					Count:   agg.Count,
-					Metrics: agg.Metrics,
+					Start:         start.Format(time.RFC3339),
+					Count:         agg.Count,
+					CanceledCount: canceledCount,
+					Metrics:       agg.Metrics,
 				})
 			}
 
@@ -911,6 +1031,9 @@ func (h *Handler) queryMetricsByRequestID(ctx context.Context, requestID string)
 	out.DurationMS = nullInt64Ptr(durMS)
 	out.StatusCode = nullInt64Ptr(statusCode)
 	out.ErrorInfo = nullStringPtr(errorInfo)
+	outcome := classifyMetricsOutcome(out.StatusCode, out.ErrorInfo)
+	out.Outcome = string(outcome)
+	out.Status = string(outcome)
 	out.InputTokens = nullInt64Ptr(inTok)
 	out.OutputTokens = nullInt64Ptr(outTok)
 	out.TotalTokens = nullInt64Ptr(totalTok)

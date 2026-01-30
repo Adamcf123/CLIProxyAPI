@@ -5,13 +5,17 @@ package middleware
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 )
 
 // RequestInfo holds essential details of an incoming HTTP request for logging purposes.
@@ -39,6 +43,8 @@ type ResponseWriterWrapper struct {
 	headers             map[string][]string        // headers stores the response headers.
 	logOnErrorOnly      bool                       // logOnErrorOnly enables logging only when an error response is detected.
 	firstChunkTimestamp time.Time                  // firstChunkTimestamp captures TTFB for streaming responses.
+	writeErrMu          sync.Mutex
+	writeErr            error
 }
 
 // NewResponseWriterWrapper creates and initializes a new ResponseWriterWrapper.
@@ -73,6 +79,7 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 
 	// CRITICAL: Write to client first (zero latency)
 	n, err := w.ResponseWriter.Write(data)
+	w.noteWriteError(err)
 
 	// THEN: Handle logging based on response type
 	if w.isStreaming && w.chunkChannel != nil {
@@ -121,6 +128,7 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 
 	// CRITICAL: Write to client first (zero latency)
 	n, err := w.ResponseWriter.WriteString(data)
+	w.noteWriteError(err)
 
 	// THEN: Capture for logging
 	if w.isStreaming && w.chunkChannel != nil {
@@ -253,10 +261,6 @@ func (w *ResponseWriterWrapper) processStreamingChunks(done chan struct{}) {
 // For non-streaming responses, it logs the complete request and response details,
 // including any API-specific request/response data stored in the Gin context.
 func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
-	if w.logger == nil {
-		return nil
-	}
-
 	finalStatusCode := w.statusCode
 	if finalStatusCode == 0 {
 		if statusWriter, ok := w.ResponseWriter.(interface{ Status() int }); ok {
@@ -264,6 +268,32 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 		} else {
 			finalStatusCode = 200
 		}
+	}
+
+	// Outcome correction for cancel/disconnect and timeouts.
+	//
+	// This happens regardless of logging enablement. Logging is a best-effort side path,
+	// but canceled persistence semantics must be stable.
+	if c != nil {
+		if state, ok := metricsruntime.GetRequestState(c); ok && state != nil {
+			state.SetStatusCode(finalStatusCode)
+			snap := state.Snapshot()
+			if !snap.IsFailure() {
+				var reqErr error
+				if c.Request != nil {
+					reqErr = c.Request.Context().Err()
+				}
+				if errors.Is(reqErr, context.DeadlineExceeded) {
+					state.SetLastError(reqErr)
+				} else if w.getWriteError() != nil {
+					state.MarkClientCanceled()
+				}
+			}
+		}
+	}
+
+	if w.logger == nil {
+		return nil
 	}
 
 	var slicesAPIResponseError []*interfaces.ErrorMessage
@@ -311,6 +341,24 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 	}
 
 	return w.logRequest(finalStatusCode, w.cloneHeaders(), w.body.Bytes(), w.extractAPIRequest(c), w.extractAPIResponse(c), w.extractAPIResponseTimestamp(c), slicesAPIResponseError, forceLog)
+}
+
+func (w *ResponseWriterWrapper) noteWriteError(err error) {
+	if err == nil {
+		return
+	}
+	w.writeErrMu.Lock()
+	if w.writeErr == nil {
+		w.writeErr = err
+	}
+	w.writeErrMu.Unlock()
+}
+
+func (w *ResponseWriterWrapper) getWriteError() error {
+	w.writeErrMu.Lock()
+	err := w.writeErr
+	w.writeErrMu.Unlock()
+	return err
 }
 
 func (w *ResponseWriterWrapper) cloneHeaders() map[string][]string {

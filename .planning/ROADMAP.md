@@ -20,8 +20,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Guaranteed Usage Publish** - 无 usage 场景也能落库，保证历史可追溯
 - [x] **Phase 7: Docs & Traceability Cleanup** - 修复规划文档漂移（Requirements/Docs 与实现一致）
 - [x] **Phase 8: Persistence Contract & Observability** - 明确 best-effort 持久化契约并补齐可观测性
-- [ ] **Phase 9: Cancel/Disconnect Semantics** - 明确客户端取消/断连的失败语义并锁定测试
-- [ ] **Phase 10: Request ID Robustness** - 强化 request_id 唯一性与冲突可见性，避免静默缺行
+- [x] **Phase 9: Cancel/Disconnect Semantics** - 明确客户端取消/断连的失败语义并锁定测试
+- [x] **Phase 10: Request ID Robustness** - 强化 request_id 唯一性与冲突可见性，避免静默缺行
 - [ ] **Phase 11: Runtime Validation (Optional)** - 在真实流量下验证性能/输出/极端流式错误语义
 
 ## Phase Details
@@ -219,7 +219,12 @@ Plans:
   2. Query API 在取消/断连场景不会把 canceled 误归类为 success
   3. 新增测试锁定该语义（避免回归）
 
-**Plans**: TBD (not planned yet)
+**Plans**: 3 plans in 3 waves
+
+Plans:
+- [x] 09-01-PLAN.md — Status Code 499 语义：将客户端取消/断连映射到 499 状态码
+- [x] 09-02-PLAN.md — Query API Canceled 三分法：success/failure/canceled 显式区分
+- [x] 09-03-PLAN.md — 测试锁定：写入层与 non-streaming 断连归类测试 + 全量回归 gate
 
 ### Phase 10: Request ID Robustness
 
@@ -236,7 +241,12 @@ Plans:
   2. 冲突不会悄悄变成“查不到行”的用户体验（可观测/可诊断/可解释）
   3. 新增测试或属性验证覆盖至少一种冲突/重复路径
 
-**Plans**: TBD (not planned yet)
+**Plans**: 3 plans in 3 waves
+
+Plans:
+- [x] 10-01-PLAN.md — 升级 request_id 生成器到 64-bit (16-char hex)
+- [x] 10-02-PLAN.md — 在 writer 层检测 request_id 冲突并记录到 health
+- [x] 10-03-PLAN.md — 测试锁定冲突检测与暴露链路
 
 ### Phase 11: Runtime Validation (Optional)
 
@@ -270,6 +280,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Guaranteed Usage Publish | 5/5 | Complete | 2026-01-30 |
 | 7. Docs & Traceability Cleanup | 4/4 | Complete | 2026-01-31 |
 | 8. Persistence Contract & Observability | 2/2 | Complete | 2026-01-30 |
-| 9. Cancel/Disconnect Semantics | 0/? | Planned | |
-| 10. Request ID Robustness | 0/? | Planned | |
+| 9. Cancel/Disconnect Semantics | 3/3 | Complete | 2026-02-01 |
+| 10. Request ID Robustness | 3/3 | Complete | 2026-02-01 |
 | 11. Runtime Validation (Optional) | 0/? | Planned (Optional) | |
