@@ -62,8 +62,7 @@ Recent decisions affecting current work:
 - TPSCollector protects windows map with RWMutex; SlidingWindow retains its own internal locking
 - Live metrics progress + summary are stderr-only; TTY gates line overwrite (\r + ANSI clear)
 - Summary is emitted as a single searchable line (metrics_summary JSON); missing usage keeps tokens/throughput as null
-- Structured metrics logging writes to logs/metrics-YYYY-MM-DD.jsonl with daily rotation
-- MetricsPlugin computes TPS/TTFT/TPOT from usage records and persists to JSONL asynchronously
+- MetricsPlugin computes TPS/TTFT/TPOT from usage records and persists asynchronously to SQLite (default `logs/metrics.db`)
 - Log enqueue is non-blocking; queue-full drops line to ensure zero impact on request path
 - Unified TTFT sampling: all streaming providers (OpenAI/Gemini/Claude) now use ForwardStream.PrefetchedChunk to ensure first payload chunk triggers TTFT
 - RequestState must be attached BEFORE any write/flush to capture true first token time
@@ -75,7 +74,7 @@ Recent decisions affecting current work:
 - SQLite metrics persistence uses a non-blocking enqueue + background writer; queue-full drops to avoid request latency impact
 - SQLite metrics rows are keyed by request_id for de-duplication; request_path is excluded from DB
 - Retention enforcement deletes rows older than 7 days after migrations and runs daily in the writer goroutine
-- Legacy JSONL metrics logging is decommissioned; SQLite is the single source of truth
+- Legacy metrics file logging is decommissioned; SQLite is the single source of truth
 
 **From Phase 04-query-api:**
 - SQLite metrics schema includes streaming as a first-class dimension (INTEGER 0/1), with default 0 for historical rows
