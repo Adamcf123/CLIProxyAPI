@@ -349,6 +349,46 @@ func assertFloatApprox(t *testing.T, got, want float64, tol float64) {
 	}
 }
 
+func decodeJSONMap(t *testing.T, b []byte) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return out
+}
+
+func mustMap(t *testing.T, v any, name string) map[string]any {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: missing or wrong type (%T)", name, v)
+	}
+	return m
+}
+
+func assertPersistenceMetaMinimalAndSafe(t *testing.T, meta map[string]any) map[string]any {
+	t.Helper()
+	persistAny, ok := meta["persistence"]
+	if !ok {
+		t.Fatalf("expected meta.persistence present when degraded")
+	}
+	persist := mustMap(t, persistAny, "meta.persistence")
+
+	allowed := map[string]struct{}{
+		"degraded":         {},
+		"dropped_total":    {},
+		"last_drop_at":     {},
+		"last_drop_reason": {},
+	}
+	for k := range persist {
+		if _, ok := allowed[k]; !ok {
+			t.Fatalf("persistence meta leaked extra fields: key=%q", k)
+		}
+	}
+	return persist
+}
+
 func TestManagementMetrics_RequestIDFound(t *testing.T) {
 	cfg := &config.Config{}
 	h := management.NewHandler(cfg, "", nil)
@@ -388,6 +428,82 @@ func TestManagementMetrics_RequestIDFound(t *testing.T) {
 	}
 	if resp.Data.TPOTMillis == nil || *resp.Data.TPOTMillis != 5 {
 		t.Fatalf("data.tpot_ms: got=%v want=%d", resp.Data.TPOTMillis, 5)
+	}
+}
+
+func TestManagementMetrics_PersistenceMetaOmittedWhenNotDegraded(t *testing.T) {
+	cfg := &config.Config{}
+	h := management.NewHandler(cfg, "", nil, management.WithPersistenceHealthProvider(func(time.Time) metricspersist.PersistenceHealth {
+		return metricspersist.PersistenceHealth{Degraded: false}
+	}))
+
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	seedMetricsDB(t, dbPath)
+	h.SetMetricsDBPath(dbPath)
+	h.SetNowUTC(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+
+	r := setupMetricsRouter(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	resp := decodeJSONMap(t, w.Body.Bytes())
+	meta := mustMap(t, resp["meta"], "meta")
+	if _, ok := meta["persistence"]; ok {
+		t.Fatalf("expected meta.persistence omitted when not degraded")
+	}
+}
+
+func TestManagementMetrics_PersistenceMetaMinimalFieldsWhenDegraded(t *testing.T) {
+	last := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cfg := &config.Config{}
+	h := management.NewHandler(cfg, "", nil, management.WithPersistenceHealthProvider(func(time.Time) metricspersist.PersistenceHealth {
+		reason := metricspersist.DropReasonQueueFull
+		return metricspersist.PersistenceHealth{
+			Degraded:       true,
+			DroppedTotal:   7,
+			LastDropAt:     last,
+			LastDropReason: &reason,
+		}
+	}))
+
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	seedMetricsDB(t, dbPath)
+	h.SetMetricsDBPath(dbPath)
+	h.SetNowUTC(func() time.Time { return time.Date(2026, 1, 1, 0, 10, 0, 0, time.UTC) })
+
+	r := setupMetricsRouter(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	resp := decodeJSONMap(t, w.Body.Bytes())
+	meta := mustMap(t, resp["meta"], "meta")
+	persist := assertPersistenceMetaMinimalAndSafe(t, meta)
+
+	if persist["degraded"] != true {
+		t.Fatalf("persistence.degraded: got=%v want=true", persist["degraded"])
+	}
+	if persist["dropped_total"] != float64(7) {
+		t.Fatalf("persistence.dropped_total: got=%v want=%d", persist["dropped_total"], 7)
+	}
+	if persist["last_drop_at"] != last.UTC().Format(time.RFC3339) {
+		t.Fatalf("persistence.last_drop_at: got=%v want=%s", persist["last_drop_at"], last.UTC().Format(time.RFC3339))
+	}
+
+	// Security boundary: persistence meta MUST NOT embed request IDs, SQL errors, or file paths.
+	if v, ok := persist["last_drop_reason"]; ok {
+		if v != string(metricspersist.DropReasonQueueFull) && v != string(metricspersist.DropReasonWriterNotStarted) && v != string(metricspersist.DropReasonInsertFailure) {
+			t.Fatalf("persistence.last_drop_reason: got=%v expected stable enum", v)
+		}
 	}
 }
 
