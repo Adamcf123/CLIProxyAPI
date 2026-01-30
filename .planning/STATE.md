@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 
 ## Current Position
 
-Phase: 3 of 4 (Persistence)
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-01-30 — Completed 03-03-PLAN.md (Retention cleanup + disable JSONL legacy)
+Phase: 4 of 4 (Query API)
+Plan: 1 of 4 in current phase
+Status: In progress
+Last activity: 2026-01-30 — Completed 04-01-PLAN.md (Streaming dimension: schema + writer persistence)
 
-Progress: [████████████] 100% (11/11 plans)
+Progress: [████████░░] 80% (12/15 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 11
+- Total plans completed: 12
 - Average duration: 7 min
-- Total execution time: 1.3 hours
+- Total execution time: 1.4 hours
 
 **By Phase:**
 
@@ -30,9 +30,10 @@ Progress: [████████████] 100% (11/11 plans)
 | 01-metrics-foundation | 4 | 4 | 4 min |
 | 02-metrics-collection | 4 | 4 | 11 min |
 | 03-persistence | 3 | 3 | 5 min |
+| 04-query-api | 1 | 4 | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: 12 min, 6 min, 5 min, 5 min, 6 min
+- Last 5 plans: 4 min, 12 min, 6 min, 5 min, 5 min
 - Trend: → (stable)
 
 *Updated after each plan completion*
@@ -74,6 +75,10 @@ Recent decisions affecting current work:
 - Retention enforcement deletes rows older than 7 days after migrations and runs daily in the writer goroutine
 - Legacy JSONL metrics logging is decommissioned; SQLite is the single source of truth
 
+**From Phase 04-query-api:**
+- SQLite metrics schema includes streaming as a first-class dimension (INTEGER 0/1), with default 0 for historical rows
+- Writer treats nil streaming as 0 (fail-closed) to avoid NULL group keys
+
 ### Pending Todos
 
 [From .planning/todos/pending/ — ideas captured during sessions]
@@ -89,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-30 07:39Z
-Stopped at: Completed 03-03-PLAN.md (Retention cleanup + disable JSONL legacy)
+Last session: 2026-01-30 09:01Z
+Stopped at: Completed 04-01-PLAN.md (Streaming dimension: schema + writer persistence)
 Resume file: None
