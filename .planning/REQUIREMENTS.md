@@ -20,9 +20,9 @@
 ### Storage（存储）
 
 - [x] **STOR-01**: 使用 SQLite 持久化存储指标数据
-- [ ] **STOR-02**: 提供 REST API 查询历史指标
-- [ ] **STOR-03**: 支持百分位统计（p50, p95, p99）
-- [ ] **STOR-04**: 支持按时间窗口聚合查询
+- [x] **STOR-02**: 提供 REST API 查询历史指标
+- [x] **STOR-03**: 支持百分位统计（p50, p95, p99）
+- [x] **STOR-04**: 支持按时间窗口聚合查询
 
 ## v2 Requirements
 
@@ -58,9 +58,9 @@
 | DISP-01 | Phase 2 | Pending |
 | DISP-02 | Phase 2 | Pending |
 | STOR-01 | Phase 3 | Complete |
-| STOR-02 | Phase 4 | Pending |
-| STOR-03 | Phase 4 | Pending |
-| STOR-04 | Phase 4 | Pending |
+| STOR-02 | Phase 4 | Complete |
+| STOR-03 | Phase 4 | Complete |
+| STOR-04 | Phase 4 | Complete |
 
 **Coverage:**
 - v1 requirements: 10 total
@@ -69,4 +69,4 @@
 
 ---
 *Requirements defined: 2025-01-29*
-*Last updated: 2025-01-29 after roadmap creation*
+*Last updated: 2026-01-30 after phase 4 verification*
