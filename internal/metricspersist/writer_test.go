@@ -29,13 +29,32 @@ func TestAsyncWriter_PersistsRowsAndDedupesByRequestID(t *testing.T) {
 	provider := "openai"
 	model := "gpt-5.2"
 
+	boolPtr := func(v bool) *bool { return &v }
+
 	// Enqueue multiple distinct records plus one duplicate request_id.
-	Enqueue(MetricRecord{RequestID: "r1", Provider: provider, Model: model})
-	Enqueue(MetricRecord{RequestID: "r2", Provider: provider, Model: model})
+	Enqueue(MetricRecord{RequestID: "r1", Provider: provider, Model: model, Streaming: boolPtr(true)})
+	Enqueue(MetricRecord{RequestID: "r2", Provider: provider, Model: model, Streaming: boolPtr(false)})
 	Enqueue(MetricRecord{RequestID: "r3", Provider: provider, Model: model})
 	Enqueue(MetricRecord{RequestID: "r2", Provider: provider, Model: model}) // duplicate
 
 	waitForCount(t, db, 3)
+
+	// Ensure streaming is persisted as INTEGER 0/1.
+	if got := queryStreaming(t, db, "r1"); got != 1 {
+		t.Fatalf("streaming for r1: got=%d want=1", got)
+	}
+	if got := queryStreaming(t, db, "r2"); got != 0 {
+		t.Fatalf("streaming for r2: got=%d want=0", got)
+	}
+}
+
+func queryStreaming(t *testing.T, db *sql.DB, requestID string) int64 {
+	t.Helper()
+	var got int64
+	if err := db.QueryRow("SELECT streaming FROM metrics WHERE request_id = ?;", requestID).Scan(&got); err != nil {
+		t.Fatalf("query streaming: %v", err)
+	}
+	return got
 }
 
 func waitForCount(t *testing.T, db *sql.DB, want int) {

@@ -11,6 +11,11 @@ type MetricRecord struct {
 	Provider  string
 	Model     string
 
+	// Streaming is stored as INTEGER (0/1) in SQLite.
+	// It is a pointer for forward-compatibility with non-standard inputs, but the
+	// current write path should always set it.
+	Streaming *bool
+
 	TPS  *float64
 	TTFT *float64
 	TPOT *float64
