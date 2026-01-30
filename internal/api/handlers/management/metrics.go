@@ -516,7 +516,7 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		"AVG(tpot) AS tpot_avg, " +
 		"AVG(duration_ms) AS duration_ms_avg " +
 		"FROM metrics " +
-		"WHERE created_at >= datetime(?) AND created_at < datetime(?)"
+		"WHERE unixepoch(created_at) >= unixepoch(?) AND unixepoch(created_at) < unixepoch(?)"
 
 	args := []any{bucketSeconds, bucketSeconds, from.Format(time.RFC3339), to.Format(time.RFC3339)}
 	if filters.Provider != nil {
