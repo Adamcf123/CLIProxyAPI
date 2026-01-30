@@ -17,6 +17,8 @@ import (
 func TestMetricsPlugin_NoUsageRecord_PersistsQueryableRow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	requestID := "0000000000000abc"
+
 	dbPath := filepath.Join(t.TempDir(), "metrics.sqlite")
 	db, err := metricspersist.InitDB(dbPath)
 	if err != nil {
@@ -46,7 +48,7 @@ func TestMetricsPlugin_NoUsageRecord_PersistsQueryableRow(t *testing.T) {
 	state.SetStatusCode(200)
 	AttachRequestState(ginCtx, state)
 
-	ctx := logging.WithRequestID(context.Background(), "req_no_usage")
+	ctx := logging.WithRequestID(context.Background(), requestID)
 	ctx = context.WithValue(ctx, "gin", ginCtx)
 
 	p := NewMetricsPlugin(nil)
@@ -74,10 +76,10 @@ func TestMetricsPlugin_NoUsageRecord_PersistsQueryableRow(t *testing.T) {
 
 	err = db.QueryRow(
 		`SELECT input_tokens, output_tokens, total_tokens, tps, tpot, status_code, streaming, error_info FROM metrics WHERE request_id = ?;`,
-		"req_no_usage",
+		requestID,
 	).Scan(&inputTokens, &outputTokens, &totalTokens, &tps, &tpot, &statusCode, &streaming, &errorInfo)
 	if err == sql.ErrNoRows {
-		t.Fatalf("expected a persisted metrics row for request_id=req_no_usage")
+		t.Fatalf("expected a persisted metrics row for request_id=%s", requestID)
 	}
 	if err != nil {
 		t.Fatalf("query persisted row: %v", err)
