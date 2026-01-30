@@ -18,6 +18,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Query API** - 历史指标查询和分析接口
 - [x] **Phase 5: Streaming Failure Semantics** - 流式失败语义可追溯且不会污染聚合
 - [x] **Phase 6: Guaranteed Usage Publish** - 无 usage 场景也能落库，保证历史可追溯
+- [ ] **Phase 7: Docs & Traceability Cleanup** - 修复规划文档漂移（Requirements/Docs 与实现一致）
+- [ ] **Phase 8: Persistence Contract & Observability** - 明确 best-effort 持久化契约并补齐可观测性
+- [ ] **Phase 9: Cancel/Disconnect Semantics** - 明确客户端取消/断连的失败语义并锁定测试
+- [ ] **Phase 10: Request ID Robustness** - 强化 request_id 唯一性与冲突可见性，避免静默缺行
+- [ ] **Phase 11: Runtime Validation (Optional)** - 在真实流量下验证性能/输出/极端流式错误语义
 
 ## Phase Details
 
@@ -155,10 +160,95 @@ Plans:
 - [x] 06-04-PLAN.md — SQLite 回归测试：无 usage 也必须可查
 - [x] 06-05-PLAN.md — Executor wiring 回归：stream end 必须 ensurePublished
 
+### Phase 7: Docs & Traceability Cleanup
+
+**Goal**: 修复规划文档漂移，确保 requirements/traceability/docs 与已验证实现一致
+
+**Depends on**: Phase 6
+
+**Requirements**: (none — tech debt closure)
+
+**Gap Closure:** Closes audit tech debt about REQUIREMENTS.md traceability drift and legacy docs referencing JSONL.
+
+**Success Criteria** (what must be TRUE):
+  1. `REQUIREMENTS.md` 的 traceability/checklist 与 Phase 1 verification 的结论一致（METR-01..04 标记为 satisfied/complete）
+  2. 文档/重要命令不再引用 legacy JSONL 作为数据源（明确 SQLite 是单一来源）
+  3. 变更有最小化范围且可被审计复核（清晰的变更点与理由）
+
+**Plans**: TBD (not planned yet)
+
+### Phase 8: Persistence Contract & Observability
+
+**Goal**: 明确并固化“best-effort 持久化”的语义契约，补齐可观测性以避免静默缺行
+
+**Depends on**: Phase 7
+
+**Requirements**: (none — hardening)
+
+**Gap Closure:** Closes audit tech debt about best-effort persistence drops and ensurePublished vs persistence guarantee tension.
+
+**Success Criteria** (what must be TRUE):
+  1. 对外可见的语义契约明确：哪些场景允许丢行、如何被观测到、如何被用户理解
+  2. 关键丢弃路径可追踪（例如 queue-full / writer-not-started / insert failure）且不会弱化安全边界
+  3. 关键行为有回归测试或契约测试锁定（至少覆盖可观测性信号）
+
+**Plans**: TBD (not planned yet)
+
+### Phase 9: Cancel/Disconnect Semantics
+
+**Goal**: 明确客户端取消/断连的归类语义（success/failure/canceled），并锁定 Query API 分类
+
+**Depends on**: Phase 8
+
+**Requirements**: (none — hardening)
+
+**Gap Closure:** Closes audit tech debt about client cancel/disconnect potentially being classified as success.
+
+**Success Criteria** (what must be TRUE):
+  1. 取消/断连的系统语义明确且一致（写入层、查询层、聚合层对齐）
+  2. Query API 在取消/断连场景不会把 canceled 误归类为 success
+  3. 新增测试锁定该语义（避免回归）
+
+**Plans**: TBD (not planned yet)
+
+### Phase 10: Request ID Robustness
+
+**Goal**: 强化 request_id 唯一性与冲突处理，使碰撞不会表现为“静默缺行”
+
+**Depends on**: Phase 9
+
+**Requirements**: (none — reliability)
+
+**Gap Closure:** Closes audit tech debt about short (32-bit) request_id collisions + ON CONFLICT DO NOTHING masking missing rows.
+
+**Success Criteria** (what must be TRUE):
+  1. request_id 的冲突概率显著降低，或冲突在系统内可被明确检测/暴露
+  2. 冲突不会悄悄变成“查不到行”的用户体验（可观测/可诊断/可解释）
+  3. 新增测试或属性验证覆盖至少一种冲突/重复路径
+
+**Plans**: TBD (not planned yet)
+
+### Phase 11: Runtime Validation (Optional)
+
+**Goal**: 在真实环境/压测中验证关键 SLO 与边界语义，给发布前信心
+
+**Depends on**: Phase 10
+
+**Requirements**: (none — validation)
+
+**Gap Closure:** Closes audit recommendations for runtime/human verification (non-blocking, output correctness, hard-to-prove streaming errors).
+
+**Success Criteria** (what must be TRUE):
+  1. metrics collection 的非阻塞性在真实负载下被验证（无明显吞吐/延迟退化）
+  2. stderr 实时输出/汇总与落库在真实环境权限/部署方式下验证可用
+  3. 对“headers 已提交后发生 terminal error”等难以单测覆盖的边界做过实测并记录结论
+
+**Plans**: TBD (not planned yet)
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -168,3 +258,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 4. Query API | 4/4 | Complete | 2026-01-30 |
 | 5. Streaming Failure Semantics | 3/3 | Complete | 2026-01-30 |
 | 6. Guaranteed Usage Publish | 5/5 | Complete | 2026-01-30 |
+| 7. Docs & Traceability Cleanup | 0/? | Planned | |
+| 8. Persistence Contract & Observability | 0/? | Planned | |
+| 9. Cancel/Disconnect Semantics | 0/? | Planned | |
+| 10. Request ID Robustness | 0/? | Planned | |
+| 11. Runtime Validation (Optional) | 0/? | Planned (Optional) | |
