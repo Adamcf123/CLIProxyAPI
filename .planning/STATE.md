@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Phase 8 verified (ready for Phase 9)
+**Current focus:** Phase 9 complete, ready for Phase 10
 
 ## Current Position
 
-Phase: 8 of 11 (Persistence Contract & Observability)
-Plan: 2 of 2 in current phase
-Status: Verified
-Last activity: 2026-01-30 — Verified Phase 8 goal (08-VERIFICATION.md)
+Phase: 9 of 11 (Cancel/Disconnect Semantics)
+Plan: 3 of 3 in current phase
+Status: Complete
+Last activity: 2026-02-01 — Completed 09-03-PLAN.md (regression gate)
 
-Progress: [██████████] 100% of planned plans to date (29/29)
+Progress: [██████████] 100% of planned plans to date (32/32)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 29
+- Total plans completed: 30
 - Average duration: 7 min
 - Total execution time: 2.0 hours
 
@@ -35,10 +35,11 @@ Progress: [██████████] 100% of planned plans to date (29/29)
 | 06-guaranteed-usage-publish | 5 | 5 | 2 min |
 | 07-docs-traceability-cleanup | 4 | 4 | 2 min |
 | 08-persistence-contract-observability | 2 | 2 | 5 min |
+| 09-cancel-disconnect-semantics | 3 | 3 | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 2 min, 1 min, 2 min, 1 min, 4 min
-- Trend: ↓ (improving)
+- Last 5 plans: 1 min, 2 min, 1 min, 4 min, 5 min
+- Trend: → (stable)
 
 *Updated after each plan completion*
 
@@ -90,6 +91,13 @@ Recent decisions affecting current work:
 - Drop reasons exposed as stable enum codes: queue_full, writer_not_started, insert_failure
 - /v0/management/metrics emits meta.persistence only when degraded to preserve default JSON shape
 
+**From Phase 09-cancel-disconnect-semantics:**
+- Outcome 三分法：success / failure / canceled，canceled 用 status_code=499 表达
+- Priority: failure > canceled > success — failure 可以覆盖 canceled，但 success 不能
+- Timeout (DeadlineExceeded) 归类为 failure (504)，不是 canceled
+- Canceled 的 ErrorInfo 必须为空，且不计入 TPS/TPOT 聚合
+- Query API percentiles 排除 canceled 样本，buckets 每 bucket 单列 canceled_count
+
 ### Pending Todos
 
 [From .planning/todos/pending/ — ideas captured during sessions]
@@ -105,6 +113,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-30 18:15Z
-Stopped at: Verified Phase 8 goal (08-VERIFICATION.md)
+Last session: 2026-02-01 01:05Z
+Stopped at: Completed 09-03-PLAN.md, Phase 9 complete
 Resume file: None
