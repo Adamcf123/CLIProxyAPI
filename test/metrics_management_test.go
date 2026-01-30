@@ -683,4 +683,12 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if f.Buckets[0].Metrics.TTFTMillisAvg != nil || f.Buckets[0].Metrics.TPOTMillisAvg != nil || f.Buckets[0].Metrics.DurationMSAvg != nil {
 		t.Fatalf("failure empty bucket metrics expected null")
 	}
+
+	// Middle bucket (00:10-00:15) has 2 failure rows: one non-2xx status and one 200+error_info streaming failure.
+	if f.Buckets[2].Start != "2026-01-01T00:10:00Z" {
+		t.Fatalf("failure data bucket start: got %q want %q", f.Buckets[2].Start, "2026-01-01T00:10:00Z")
+	}
+	if f.Buckets[2].Count != 2 {
+		t.Fatalf("failure data bucket count: got %d want %d", f.Buckets[2].Count, 2)
+	}
 }
