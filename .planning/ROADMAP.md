@@ -128,7 +128,7 @@ Plans:
 
 Plans:
 - [ ] 05-01-PLAN.md — 在 ForwardStream 中写入可持久化失败信号（RequestState.LastError）+ 单测
-- [ ] 05-02-PLAN.md — 对齐 OpenAI/Gemini terminal error：写错误 payload 前设置非 2xx status
+- [x] 05-02-PLAN.md — 对齐 OpenAI/Gemini terminal error：写错误 payload 前设置非 2xx status
 - [x] 05-03-PLAN.md — Query API buckets 回归测试：200 + error_info 必须归类为 failure
 
 ### Phase 6: Guaranteed Usage Publish
