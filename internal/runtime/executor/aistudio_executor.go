@@ -257,6 +257,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 	stream = out
 	go func(first wsrelay.StreamEvent) {
 		defer close(out)
+		defer reporter.ensurePublished(ctx)
 		var param any
 		metadataLogged := false
 		processEvent := func(event wsrelay.StreamEvent) bool {

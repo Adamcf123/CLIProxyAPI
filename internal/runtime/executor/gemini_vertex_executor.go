@@ -618,6 +618,7 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 	stream = out
 	go func() {
 		defer close(out)
+		defer reporter.ensurePublished(ctx)
 		defer func() {
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("vertex executor: close response body error: %v", errClose)
@@ -742,6 +743,7 @@ func (e *GeminiVertexExecutor) executeStreamWithAPIKey(ctx context.Context, auth
 	stream = out
 	go func() {
 		defer close(out)
+		defer reporter.ensurePublished(ctx)
 		defer func() {
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("vertex executor: close response body error: %v", errClose)
