@@ -11,6 +11,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
+var enqueueMetricRecord = metricspersist.Enqueue
+
 const (
 	minOutputTokensForRates            = 16
 	minStreamingContentTokenChunks     = 2
@@ -195,7 +197,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	// Persist to SQLite asynchronously (off request path).
 	// Duplicates are handled by the DB unique constraint on request_id.
 	if requestID := logging.GetRequestID(ctx); requestID != "" {
-		metricspersist.Enqueue(metricspersist.MetricRecord{
+		enqueueMetricRecord(metricspersist.MetricRecord{
 			RequestID:    requestID,
 			Provider:     provider,
 			Model:        model,
