@@ -199,6 +199,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 			RequestID:    requestID,
 			Provider:     provider,
 			Model:        model,
+			Streaming:    &snap.Streaming,
 			TPS:          tps,
 			TTFT:         ttft,
 			TPOT:         tpot,
