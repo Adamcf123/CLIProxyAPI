@@ -160,4 +160,5 @@ _ = svc.Shutdown(ctx)
 
 - Hot reload: changes to `config.yaml` and `auths/` are picked up automatically.
 - Request logging can be toggled at runtime via the Management API.
+- Metrics are persisted to SQLite at `logs/metrics.db` and can be queried via `GET /v0/management/metrics`.
 - Gemini Web features (`gemini-web.*`) are honored in the embedded server.

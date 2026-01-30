@@ -7,8 +7,8 @@ import (
 )
 
 func init() {
-	// Register MetricsPlugin alongside LoggerPlugin to compute and persist
-	// TPS/TTFT/TPOT metrics as structured JSONL logs.
+	// Register MetricsPlugin alongside LoggerPlugin to compute TPS/TTFT/TPOT
+	// metrics and persist them via the SQLite metrics database (default: logs/metrics.db).
 	collector := metrics.NewCollector(nil)
 	coreusage.RegisterPlugin(metricsruntime.NewMetricsPlugin(collector))
 }
