@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Query API
+**Current focus:** Milestone gap closure
 
 ## Current Position
 
-Phase: 4 of 4 (Query API)
-Plan: 4 of 4 in current phase
-Status: Phase complete
-Last activity: 2026-01-30 — Verified Phase 4 goal (04-VERIFICATION.md)
+Phase: 5 of 6 (Streaming Failure Semantics)
+Plan: Pending planning for gap-closure phases
+Status: Gap closure phases created
+Last activity: 2026-01-30 — Added Phase 5-6 gap closure phases (v1 audit)
 
-Progress: [██████████] 100% (15/15 plans)
+Progress: [██████████] 100% of original plans (15/15) + 2 gap-closure phases pending
 
 ## Performance Metrics
 
