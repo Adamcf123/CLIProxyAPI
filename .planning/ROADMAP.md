@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Metrics Collection** - 集成指标收集到流式响应处理
 - [x] **Phase 3: Persistence** - SQLite 持久化存储
 - [x] **Phase 4: Query API** - 历史指标查询和分析接口
-- [ ] **Phase 5: Streaming Failure Semantics** - 流式失败语义可追溯且不会污染聚合
+- [x] **Phase 5: Streaming Failure Semantics** - 流式失败语义可追溯且不会污染聚合
 - [ ] **Phase 6: Guaranteed Usage Publish** - 无 usage 场景也能落库，保证历史可追溯
 
 ## Phase Details
