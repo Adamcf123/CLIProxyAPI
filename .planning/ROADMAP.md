@@ -129,7 +129,7 @@ Plans:
   2. RequestState 会记录可持久化的 error_info（或等价失败信号），确保 DB 行可判定为 failure
   3. Query API 的 success/failure 切分在“流式失败”场景下准确（新增测试锁定）
 
-**Plans**: 3 plans in 1 wave
+**Plans**: 4 plans in 1 wave
 
 Plans:
 - [x] 05-01-PLAN.md — 在 ForwardStream 中写入可持久化失败信号（RequestState.LastError）+ 单测
@@ -175,7 +175,13 @@ Plans:
   2. 文档/重要命令不再引用 legacy JSONL 作为数据源（明确 SQLite 是单一来源）
   3. 变更有最小化范围且可被审计复核（清晰的变更点与理由）
 
-**Plans**: TBD (not planned yet)
+**Plans**: 4 plans in 1 wave
+
+Plans:
+- [ ] 07-01-PLAN.md — 对齐 REQUIREMENTS.md（METR-01..04）到 Phase 01 验证结论
+- [ ] 07-02-PLAN.md — 补齐 README 的 SQLite/Query API 指南 + 修复 MetricsPlugin 注释漂移
+- [ ] 07-03-PLAN.md — 修复 STATE.md + operator docs 的 JSONL 漂移（对齐 SQLite 单一来源）
+- [ ] 07-04-PLAN.md — 清理 docs/*.md 的 JSONL 遗留表述（对齐 SQLite 单一来源）
 
 ### Phase 8: Persistence Contract & Observability
 
