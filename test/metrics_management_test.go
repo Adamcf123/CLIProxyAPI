@@ -31,6 +31,8 @@ type metricsResponse struct {
 	Data *struct {
 		RequestID  string `json:"request_id"`
 		Streaming  bool   `json:"streaming"`
+		Outcome    string `json:"outcome"`
+		Status     string `json:"status"`
 		TTFTMillis *int64 `json:"ttft_ms"`
 		TPOTMillis *int64 `json:"tpot_ms"`
 		CreatedAt  string `json:"created_at"`
@@ -197,6 +199,28 @@ func seedMetricsDB(t *testing.T, dbPath string) {
 	)
 	if err != nil {
 		t.Fatalf("insert metrics row: %v", err)
+	}
+
+	// canceled row: status_code=499 must be classified as outcome=canceled and MUST NOT set envelope.error.
+	_, err = db.Exec(
+		insert,
+		"req_canceled",
+		"openai",
+		"gpt-4o",
+		1,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		9999,
+		499,
+		nil,
+		"2026-01-01T00:01:00Z",
+	)
+	if err != nil {
+		t.Fatalf("insert canceled metrics row: %v", err)
 	}
 }
 
@@ -428,6 +452,46 @@ func TestManagementMetrics_RequestIDFound(t *testing.T) {
 	}
 	if resp.Data.TPOTMillis == nil || *resp.Data.TPOTMillis != 5 {
 		t.Fatalf("data.tpot_ms: got=%v want=%d", resp.Data.TPOTMillis, 5)
+	}
+	if resp.Data.Outcome != "success" {
+		t.Fatalf("data.outcome: got %q want %q", resp.Data.Outcome, "success")
+	}
+	if resp.Data.Status != "success" {
+		t.Fatalf("data.status: got %q want %q", resp.Data.Status, "success")
+	}
+}
+
+func TestManagementMetrics_RequestIDCanceledHasNoEnvelopeError(t *testing.T) {
+	cfg := &config.Config{}
+	h := management.NewHandler(cfg, "", nil)
+
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	seedMetricsDB(t, dbPath)
+	h.SetMetricsDBPath(dbPath)
+	h.SetNowUTC(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+
+	r := setupMetricsRouter(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/metrics?request_id=req_canceled", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	resp := decodeJSONMap(t, w.Body.Bytes())
+	if _, ok := resp["error"]; ok {
+		t.Fatalf("expected envelope.error omitted for canceled request")
+	}
+	data := mustMap(t, resp["data"], "data")
+	if data["outcome"] != "canceled" {
+		t.Fatalf("data.outcome: got=%v want=%q", data["outcome"], "canceled")
+	}
+	if data["status"] != "canceled" {
+		t.Fatalf("data.status: got=%v want=%q", data["status"], "canceled")
+	}
+	if v, ok := data["error_info"]; !ok || v != nil {
+		t.Fatalf("data.error_info: expected null, got=%v (ok=%t)", v, ok)
 	}
 }
 
