@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 ## Current Position
 
 Phase: 5 of 6 (Streaming Failure Semantics)
-Plan: 2 of 3 in current phase (05-02 + 05-03 complete)
-Status: In progress
-Last activity: 2026-01-30 — Completed 05-02-PLAN.md
+Plan: 3 of 3 in current phase (05-01 + 05-02 + 05-03 complete)
+Status: Phase complete
+Last activity: 2026-01-30 — Completed 05-01-PLAN.md
 
-Progress: [█████████░] 94% of total plans (17/18)
+Progress: [██████████] 100% of total plans (18/18)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 17
+- Total plans completed: 18
 - Average duration: 7 min
 - Total execution time: 1.6 hours
 
@@ -79,6 +79,9 @@ Recent decisions affecting current work:
 - SQLite metrics schema includes streaming as a first-class dimension (INTEGER 0/1), with default 0 for historical rows
 - Writer treats nil streaming as 0 (fail-closed) to avoid NULL group keys
 
+**From Phase 05-streaming-failure-semantics:**
+- Streaming terminal errors persist via RequestState.LastError and map into MetricRecord.ErrorInfo for Query API classification
+
 ### Pending Todos
 
 [From .planning/todos/pending/ — ideas captured during sessions]
@@ -94,6 +97,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-30 10:54Z
-Stopped at: Completed 05-02-PLAN.md
+Last session: 2026-01-30 10:56Z
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None
