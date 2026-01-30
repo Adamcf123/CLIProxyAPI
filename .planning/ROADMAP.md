@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Persistence** - SQLite 持久化存储
 - [x] **Phase 4: Query API** - 历史指标查询和分析接口
 - [x] **Phase 5: Streaming Failure Semantics** - 流式失败语义可追溯且不会污染聚合
-- [ ] **Phase 6: Guaranteed Usage Publish** - 无 usage 场景也能落库，保证历史可追溯
+- [x] **Phase 6: Guaranteed Usage Publish** - 无 usage 场景也能落库，保证历史可追溯
 
 ## Phase Details
 
@@ -150,10 +150,10 @@ Plans:
 
 Plans:
 - [x] 06-01-PLAN.md — usageReporter: 发布测试缝 + 失败优先级单测
-- [ ] 06-02-PLAN.md — Claude/Codex/Qwen: 结束时 ensurePublished（含流式 goroutine）
-- [ ] 06-03-PLAN.md — Gemini/Vertex/AIStudio: 结束时 ensurePublished（含流式 goroutine）
-- [ ] 06-04-PLAN.md — SQLite 回归测试：无 usage 也必须可查
-- [ ] 06-05-PLAN.md — Executor wiring 回归：stream end 必须 ensurePublished
+- [x] 06-02-PLAN.md — Claude/Codex/Qwen: 结束时 ensurePublished（含流式 goroutine）
+- [x] 06-03-PLAN.md — Gemini/Vertex/AIStudio: 结束时 ensurePublished（含流式 goroutine）
+- [x] 06-04-PLAN.md — SQLite 回归测试：无 usage 也必须可查
+- [x] 06-05-PLAN.md — Executor wiring 回归：stream end 必须 ensurePublished
 
 ## Progress
 
@@ -167,4 +167,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Persistence | 3/3 | Complete | 2026-01-30 |
 | 4. Query API | 4/4 | Complete | 2026-01-30 |
 | 5. Streaming Failure Semantics | 3/3 | Complete | 2026-01-30 |
-| 6. Guaranteed Usage Publish | 0/? | Planned | - |
+| 6. Guaranteed Usage Publish | 5/5 | Complete | 2026-01-30 |
