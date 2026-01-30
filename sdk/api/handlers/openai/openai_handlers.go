@@ -132,10 +132,14 @@ func (h *OpenAIAPIHandler) ChatCompletions(c *gin.Context) {
 
 		state.SetRequestPath(c.Request.URL.Path)
 		state.SetStatusCode(c.Writer.Status())
-		if state.Metrics == nil {
-			metricsruntime.PrintSummary(state)
-		}
 	} else {
+		state := metricsruntime.NewRequestState(false, gjson.GetBytes(rawJSON, "model").String())
+		state.SetProvider(OpenAI)
+		metricsruntime.AttachRequestState(c, state)
+		defer func() {
+			state.SetRequestPath(c.Request.URL.Path)
+			state.SetStatusCode(c.Writer.Status())
+		}()
 		h.handleNonStreamingResponse(c, rawJSON)
 	}
 
@@ -189,10 +193,14 @@ func (h *OpenAIAPIHandler) Completions(c *gin.Context) {
 
 		state.SetRequestPath(c.Request.URL.Path)
 		state.SetStatusCode(c.Writer.Status())
-		if state.Metrics == nil {
-			metricsruntime.PrintSummary(state)
-		}
 	} else {
+		state := metricsruntime.NewRequestState(false, gjson.GetBytes(rawJSON, "model").String())
+		state.SetProvider(OpenAI)
+		metricsruntime.AttachRequestState(c, state)
+		defer func() {
+			state.SetRequestPath(c.Request.URL.Path)
+			state.SetStatusCode(c.Writer.Status())
+		}()
 		h.handleCompletionsNonStreamingResponse(c, rawJSON)
 	}
 

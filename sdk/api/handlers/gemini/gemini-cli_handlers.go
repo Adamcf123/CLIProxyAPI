@@ -172,9 +172,6 @@ func (h *GeminiCLIAPIHandler) handleInternalStreamGenerateContent(c *gin.Context
 
 	state.SetRequestPath(c.Request.URL.Path)
 	state.SetStatusCode(c.Writer.Status())
-	if state.Metrics == nil {
-		metricsruntime.PrintSummary(state)
-	}
 	return
 }
 
