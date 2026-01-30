@@ -93,6 +93,10 @@ func (w *sqliteWriter) run() {
 		return
 	}
 
+	// Keep the DB self-cleaning even for long-lived processes.
+	cleanupTicker := time.NewTicker(24 * time.Hour)
+	defer cleanupTicker.Stop()
+
 	const insertSQL = `INSERT INTO metrics (
 		request_id,
 		provider,
@@ -139,7 +143,18 @@ func (w *sqliteWriter) run() {
 		)
 	}
 
-	for r := range w.queue {
-		insert(r)
+	// Best-effort: retention should never impact request path.
+	_, _ = Cleanup(db, defaultRetentionDays)
+
+	for {
+		select {
+		case r, ok := <-w.queue:
+			if !ok {
+				return
+			}
+			insert(r)
+		case <-cleanupTicker.C:
+			_, _ = Cleanup(db, defaultRetentionDays)
+		}
 	}
 }
