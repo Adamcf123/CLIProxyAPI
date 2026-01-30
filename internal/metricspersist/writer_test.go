@@ -8,8 +8,6 @@ import (
 )
 
 func TestAsyncWriter_PersistsRowsAndDedupesByRequestID(t *testing.T) {
-	t.Parallel()
-
 	dbPath := filepath.Join(t.TempDir(), "metrics.db")
 	db, err := InitDB(dbPath)
 	if err != nil {
