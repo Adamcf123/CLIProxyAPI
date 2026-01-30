@@ -96,10 +96,14 @@ func (h *OpenAIResponsesAPIHandler) Responses(c *gin.Context) {
 
 		state.SetRequestPath(c.Request.URL.Path)
 		state.SetStatusCode(c.Writer.Status())
-		if state.Metrics == nil {
-			metricsruntime.PrintSummary(state)
-		}
 	} else {
+		state := metricsruntime.NewRequestState(false, gjson.GetBytes(rawJSON, "model").String())
+		state.SetProvider(OpenaiResponse)
+		metricsruntime.AttachRequestState(c, state)
+		defer func() {
+			state.SetRequestPath(c.Request.URL.Path)
+			state.SetStatusCode(c.Writer.Status())
+		}()
 		h.handleNonStreamingResponse(c, rawJSON)
 	}
 
@@ -237,24 +241,19 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 
 			// Success! Set headers.
 			setSSEHeaders()
-
-			// Write first chunk logic (matching forwardResponsesStream)
-			if bytes.HasPrefix(chunk, []byte("event:")) {
-				_, _ = c.Writer.Write([]byte("\n"))
-			}
-			_, _ = c.Writer.Write(chunk)
-			_, _ = c.Writer.Write([]byte("\n"))
-			flusher.Flush()
-
-			// Continue
-			h.forwardResponsesStream(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan)
+			h.forwardResponsesStreamWithPrefetched(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan, chunk)
 			return
 		}
 	}
 }
 
 func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	h.forwardResponsesStreamWithPrefetched(c, flusher, cancel, data, errs, nil)
+}
+
+func (h *OpenAIResponsesAPIHandler) forwardResponsesStreamWithPrefetched(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, prefetched []byte) {
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
+		PrefetchedChunk: prefetched,
 		WriteChunk: func(chunk []byte) {
 			if bytes.HasPrefix(chunk, []byte("event:")) {
 				_, _ = c.Writer.Write([]byte("\n"))
