@@ -124,7 +124,12 @@ Plans:
   2. RequestState 会记录可持久化的 error_info（或等价失败信号），确保 DB 行可判定为 failure
   3. Query API 的 success/failure 切分在“流式失败”场景下准确（新增测试锁定）
 
-**Plans**: Pending (will be created by `/gsd-plan-phase 5`)
+**Plans**: 3 plans in 1 wave
+
+Plans:
+- [ ] 05-01-PLAN.md — 在 ForwardStream 中写入可持久化失败信号（RequestState.LastError）+ 单测
+- [ ] 05-02-PLAN.md — 对齐 OpenAI/Gemini terminal error：写错误 payload 前设置非 2xx status
+- [ ] 05-03-PLAN.md — Query API buckets 回归测试：200 + error_info 必须归类为 failure
 
 ### Phase 6: Guaranteed Usage Publish
 
@@ -154,5 +159,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Metrics Collection | 4/4 | Complete | 2026-01-29 |
 | 3. Persistence | 3/3 | Complete | 2026-01-30 |
 | 4. Query API | 4/4 | Complete | 2026-01-30 |
-| 5. Streaming Failure Semantics | 0/? | Planned | - |
+| 5. Streaming Failure Semantics | 0/3 | Planned | - |
 | 6. Guaranteed Usage Publish | 0/? | Planned | - |
