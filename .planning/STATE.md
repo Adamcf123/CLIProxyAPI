@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Milestone gap closure
+**Current focus:** Phase 7 complete (ready for Phase 8)
 
 ## Current Position
 
-Phase: 5 of 6 (Streaming Failure Semantics)
-Plan: Pending planning for gap-closure phases
-Status: Gap closure phases created
-Last activity: 2026-01-30 — Added Phase 5-6 gap closure phases (v1 audit)
+Phase: 7 of 11 (Docs & Traceability Cleanup)
+Plan: 4 of 4 in current phase
+Status: Verified
+Last activity: 2026-01-31 — Verified Phase 7 goal (07-VERIFICATION.md)
 
-Progress: [██████████] 100% of original plans (15/15) + 2 gap-closure phases pending
+Progress: [██████████] 100% of planned plans to date (27/27) + Phase 7 verified
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
+- Total plans completed: 27
 - Average duration: 7 min
-- Total execution time: 1.6 hours
+- Total execution time: 1.8 hours
 
 **By Phase:**
 
@@ -31,10 +31,13 @@ Progress: [██████████] 100% of original plans (15/15) + 2 ga
 | 02-metrics-collection | 4 | 4 | 11 min |
 | 03-persistence | 3 | 3 | 5 min |
 | 04-query-api | 4 | 4 | 7 min |
+| 05-streaming-failure-semantics | 3 | 3 | 4 min |
+| 06-guaranteed-usage-publish | 5 | 5 | 2 min |
+| 07-docs-traceability-cleanup | 4 | 4 | 2 min |
 
 **Recent Trend:**
-- Last 5 plans: 8 min, 7 min, 4 min, 12 min, 6 min
-- Trend: → (stable)
+- Last 5 plans: 2 min, 1 min, 2 min, 1 min, 1 min
+- Trend: ↓ (improving)
 
 *Updated after each plan completion*
 
@@ -60,8 +63,7 @@ Recent decisions affecting current work:
 - TPSCollector protects windows map with RWMutex; SlidingWindow retains its own internal locking
 - Live metrics progress + summary are stderr-only; TTY gates line overwrite (\r + ANSI clear)
 - Summary is emitted as a single searchable line (metrics_summary JSON); missing usage keeps tokens/throughput as null
-- Structured metrics logging writes to logs/metrics-YYYY-MM-DD.jsonl with daily rotation
-- MetricsPlugin computes TPS/TTFT/TPOT from usage records and persists to JSONL asynchronously
+- MetricsPlugin computes TPS/TTFT/TPOT from usage records and persists asynchronously to SQLite (default `logs/metrics.db`)
 - Log enqueue is non-blocking; queue-full drops line to ensure zero impact on request path
 - Unified TTFT sampling: all streaming providers (OpenAI/Gemini/Claude) now use ForwardStream.PrefetchedChunk to ensure first payload chunk triggers TTFT
 - RequestState must be attached BEFORE any write/flush to capture true first token time
@@ -73,11 +75,14 @@ Recent decisions affecting current work:
 - SQLite metrics persistence uses a non-blocking enqueue + background writer; queue-full drops to avoid request latency impact
 - SQLite metrics rows are keyed by request_id for de-duplication; request_path is excluded from DB
 - Retention enforcement deletes rows older than 7 days after migrations and runs daily in the writer goroutine
-- Legacy JSONL metrics logging is decommissioned; SQLite is the single source of truth
+- Legacy metrics file logging is decommissioned; SQLite is the single source of truth
 
 **From Phase 04-query-api:**
 - SQLite metrics schema includes streaming as a first-class dimension (INTEGER 0/1), with default 0 for historical rows
 - Writer treats nil streaming as 0 (fail-closed) to avoid NULL group keys
+
+**From Phase 05-streaming-failure-semantics:**
+- Streaming terminal errors persist via RequestState.LastError and map into MetricRecord.ErrorInfo for Query API classification
 
 ### Pending Todos
 
@@ -94,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-30 09:40Z
-Stopped at: Verified Phase 4 goal (04-VERIFICATION.md)
+Last session: 2026-01-30 15:31Z
+Stopped at: Verified Phase 6 goal (06-VERIFICATION.md)
 Resume file: None

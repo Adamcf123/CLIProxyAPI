@@ -84,6 +84,12 @@ curl -sS \
 # Phase 03 持久化：写入 logs/metrics.db（SQLite）
 sqlite3 "logs/metrics.db" "SELECT request_id, provider, model, tps, ttft, tpot, created_at FROM metrics ORDER BY created_at DESC LIMIT 5;"
 
+# 历史指标查询：GET /v0/management/metrics（从 logs/metrics.db 读取）
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/metrics?mode=percentiles" \
+  | jq '.'
+
 
 # OpenAI 兼容：Chat Completions（流式）
 curl -sS -N \
