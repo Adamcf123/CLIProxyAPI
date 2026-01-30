@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Metrics Collection
+**Current focus:** Query API
 
 ## Current Position
 
-Phase: 2 of 4 (Metrics Collection)
-Plan: 4 of 4 in current phase
+Phase: 3 of 4 (Persistence)
+Plan: 3 of 3 in current phase
 Status: Phase complete
-Last activity: 2026-01-29 — Completed 02-04-PLAN.md (gap closure - unified TTFT sampling)
+Last activity: 2026-01-30 — Completed 03-03-PLAN.md (Retention cleanup + disable JSONL legacy)
 
-Progress: [████████████] 100%
+Progress: [████████████] 100% (11/11 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
-- Average duration: 9 min
-- Total execution time: 1.0 hours
+- Total plans completed: 11
+- Average duration: 7 min
+- Total execution time: 1.3 hours
 
 **By Phase:**
 
@@ -29,10 +29,11 @@ Progress: [████████████] 100%
 |-------|-------|-------|----------|
 | 01-metrics-foundation | 4 | 4 | 4 min |
 | 02-metrics-collection | 4 | 4 | 11 min |
+| 03-persistence | 3 | 3 | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 12 min, 19 min, 12 min, 6 min
-- Trend: ↓ (improving)
+- Last 5 plans: 12 min, 6 min, 5 min, 5 min, 6 min
+- Trend: → (stable)
 
 *Updated after each plan completion*
 
@@ -65,6 +66,14 @@ Recent decisions affecting current work:
 - RequestState must be attached BEFORE any write/flush to capture true first token time
 - Prefetched chunk pattern: handler peeks first chunk for error detection, then passes to ForwardStream for unified output + metrics
 
+**From Phase 03-persistence:**
+- Startup runs embedded SQLite migrations (goose); failures must fail-fast (os.Exit(1))
+- SQLite InitDB uses modernc.org/sqlite with WAL/NORMAL/busy_timeout PRAGMAs and a single underlying connection for consistency
+- SQLite metrics persistence uses a non-blocking enqueue + background writer; queue-full drops to avoid request latency impact
+- SQLite metrics rows are keyed by request_id for de-duplication; request_path is excluded from DB
+- Retention enforcement deletes rows older than 7 days after migrations and runs daily in the writer goroutine
+- Legacy JSONL metrics logging is decommissioned; SQLite is the single source of truth
+
 ### Pending Todos
 
 [From .planning/todos/pending/ — ideas captured during sessions]
@@ -80,6 +89,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-29 17:17Z
-Stopped at: Completed 02-04-PLAN.md (gap closure - unified TTFT sampling)
+Last session: 2026-01-30 07:39Z
+Stopped at: Completed 03-03-PLAN.md (Retention cleanup + disable JSONL legacy)
 Resume file: None

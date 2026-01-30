@@ -5,13 +5,21 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricslog"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricspersist"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
+const (
+	minOutputTokensForRates            = 16
+	minStreamingContentTokenChunks     = 2
+	minNonStreamingTotalDuration       = 300 * time.Millisecond
+	minStreamingPostFirstTokenDuration = 300 * time.Millisecond
+)
+
 // MetricsPlugin implements sdk/cliproxy/usage.Plugin to calculate performance
-// metrics (TPS, TTFT, TPOT) and persist them as structured JSONL logs.
+// metrics (TPS, TTFT, TPOT) and persist them to SQLite.
 type MetricsPlugin struct {
 	collector *metrics.TPSCollector
 }
@@ -42,78 +50,119 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	usageMissing := inputTokens == 0 && outputTokens == 0 && totalTokens == 0 && !record.Failed
 
 	// Prepare log line with available data.
-	line := metricslog.MetricsLogLine{
-		TrackingID: record.AuthID, // fallback; may be overwritten below
-		Provider:   record.Provider,
-		Model:      record.Model,
-		Timestamp:  now,
-	}
+	trackingID := record.AuthID // fallback; may be overwritten below
+	provider := record.Provider
+	model := record.Model
+
+	var (
+		tps  *float64
+		ttft *float64
+		tpot *float64
+
+		inputTokensPtr  *int64
+		outputTokensPtr *int64
+		totalTokensPtr  *int64
+
+		durationMSPtr *int64
+		statusCodePtr *int64
+		errorInfoPtr  *string
+	)
 
 	if !usageMissing {
 		if inputTokens != 0 {
 			v := inputTokens
-			line.InputTokens = &v
+			inputTokensPtr = &v
 		}
 		if outputTokens != 0 {
 			v := outputTokens
-			line.OutputTokens = &v
+			outputTokensPtr = &v
 		}
 		if totalTokens != 0 {
 			v := totalTokens
-			line.TotalTokens = &v
+			totalTokensPtr = &v
 		}
 	}
 
 	// Try to get gin context and request state for richer metrics.
 	var state *RequestState
+	var snap RequestStateSnapshot
 	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
 		state, _ = GetRequestState(ginCtx)
 		if state != nil {
+			snap = state.Snapshot()
 			// Prefer state tracking ID if available.
-			if state.TrackingID != "" {
-				line.TrackingID = state.TrackingID
+			if snap.TrackingID != "" {
+				trackingID = snap.TrackingID
 			}
-			line.RequestPath = &state.RequestPath
-			if state.StatusCode != 0 {
-				code := int64(state.StatusCode)
-				line.StatusCode = &code
+			if snap.StatusCode != 0 {
+				code := int64(snap.StatusCode)
+				statusCodePtr = &code
 			}
-			if state.LastError != "" {
-				line.ErrorInfo = &state.LastError
+			if snap.LastError != "" {
+				v := snap.LastError
+				errorInfoPtr = &v
+			}
+			// Backfill state tokens when usage is available so progress/summary can show them.
+			if !usageMissing {
+				if inputTokens > 0 {
+					state.SetInputTokens(int(inputTokens))
+				}
+				if outputTokens > 0 {
+					state.SetOutputTokens(int(outputTokens))
+				}
+			}
+		}
+	}
+	// TTFT is computable from timestamps even when token usage is missing.
+	if state != nil && !snap.StartedAt.IsZero() {
+		if snap.Streaming {
+			if snap.FirstContentTokenAt != nil {
+				secs := snap.FirstContentTokenAt.Sub(snap.StartedAt).Seconds()
+				if secs > 0 {
+					v := secs
+					ttft = &v
+				}
+			}
+		} else {
+			secs := now.Sub(snap.StartedAt).Seconds()
+			if secs > 0 {
+				v := secs
+				ttft = &v
 			}
 		}
 	}
 
-	// Compute TPS/TTFT/TPOT when we have output tokens and sufficient timing data.
+	// Compute TPS/TPOT when we have output tokens and sufficient timing data.
+	// Note: even when TPS/TPOT are suppressed for confidence reasons, TTFT is still logged above.
 	if outputTokens > 0 && state != nil {
 		key := metrics.MetricKey{
 			Provider:  record.Provider,
 			Model:     record.Model,
-			Streaming: state.Streaming,
+			Streaming: snap.Streaming,
 		}
 
 		// Build RequestMetrics for calculation.
 		m := &metrics.RequestMetrics{
-			TrackingID: line.TrackingID,
+			TrackingID: trackingID,
 			Key:        key,
-			StartTime:  state.StartedAt,
+			StartTime:  snap.StartedAt,
 			EndTime:    now,
 		}
-		if state.FirstTokenAt != nil {
-			m.FirstTokenTime = *state.FirstTokenAt
+		if snap.FirstContentTokenAt != nil {
+			m.FirstTokenTime = *snap.FirstContentTokenAt
 		}
 
 		// Only proceed if we have valid timing.
 		canCompute := false
-		if state.Streaming {
+		if snap.Streaming {
 			// Streaming requires first token time.
-			canCompute = state.FirstTokenAt != nil && !state.FirstTokenAt.IsZero()
+			canCompute = snap.FirstContentTokenAt != nil && !snap.FirstContentTokenAt.IsZero()
 		} else {
 			// Non-streaming only requires start time.
-			canCompute = !state.StartedAt.IsZero()
+			canCompute = !snap.StartedAt.IsZero()
 		}
 
-		if canCompute {
+		if canCompute && shouldComputeRates(snap, outputTokens, now) {
 			// CompleteRequest calculates TTFT, TPS, TPOT and stores in sliding window.
 			// We intentionally ignore errors here (fail-silent for logging path).
 			_ = p.collector.CompleteRequest(m, int(outputTokens))
@@ -121,15 +170,15 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 			// Populate log line with calculated metrics.
 			if m.TPS != 0 {
 				v := m.TPS
-				line.TPS = &v
+				tps = &v
 			}
 			if m.TTFT != 0 {
 				v := m.TTFT
-				line.TTFT = &v
+				ttft = &v
 			}
 			if m.TPOT != 0 {
 				v := m.TPOT
-				line.TPOT = &v
+				tpot = &v
 			}
 
 			// Backfill state for display/summary purposes.
@@ -140,9 +189,60 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	// Calculate duration if we have start time.
 	if state != nil && !state.StartedAt.IsZero() {
 		duration := now.Sub(state.StartedAt).Milliseconds()
-		line.DurationMS = &duration
+		durationMSPtr = &duration
 	}
 
-	// Enqueue for async write (non-blocking, drops on full queue).
-	metricslog.Enqueue(line)
+	// Persist to SQLite asynchronously (off request path).
+	// Duplicates are handled by the DB unique constraint on request_id.
+	if requestID := logging.GetRequestID(ctx); requestID != "" {
+		metricspersist.Enqueue(metricspersist.MetricRecord{
+			RequestID:    requestID,
+			Provider:     provider,
+			Model:        model,
+			TPS:          tps,
+			TTFT:         ttft,
+			TPOT:         tpot,
+			InputTokens:  inputTokensPtr,
+			OutputTokens: outputTokensPtr,
+			TotalTokens:  totalTokensPtr,
+			DurationMS:   durationMSPtr,
+			StatusCode:   statusCodePtr,
+			ErrorInfo:    errorInfoPtr,
+		})
+	}
+}
+
+func shouldComputeRates(snap RequestStateSnapshot, outputTokens int64, end time.Time) bool {
+	if outputTokens < minOutputTokensForRates {
+		return false
+	}
+	if snap.StartedAt.IsZero() {
+		return false
+	}
+	if end.IsZero() {
+		return false
+	}
+
+	if snap.Streaming {
+		if snap.FirstContentTokenAt == nil || snap.FirstContentTokenAt.IsZero() {
+			return false
+		}
+		// If the provider batches almost all output into a single content chunk (or flushes
+		// only once near the end), TPS/TPOT become misleading. Require at least 2 content
+		// chunks and some post-first-token duration.
+		if snap.ContentTokenChunks < minStreamingContentTokenChunks {
+			return false
+		}
+		post := end.Sub(*snap.FirstContentTokenAt)
+		if post < minStreamingPostFirstTokenDuration {
+			return false
+		}
+		return true
+	}
+
+	total := end.Sub(snap.StartedAt)
+	if total < minNonStreamingTotalDuration {
+		return false
+	}
+	return true
 }

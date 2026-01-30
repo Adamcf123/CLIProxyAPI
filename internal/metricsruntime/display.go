@@ -78,8 +78,8 @@ func PrintProgress(state *RequestState, isTTY bool) {
 	model := valueOrDash(snap.Model)
 
 	ttft := "--"
-	if snap.FirstTokenAt != nil {
-		secs := snap.FirstTokenAt.Sub(snap.StartedAt).Seconds()
+	if snap.FirstContentTokenAt != nil {
+		secs := snap.FirstContentTokenAt.Sub(snap.StartedAt).Seconds()
 		ttft = fmt.Sprintf("%.3fs", secs)
 	}
 
@@ -113,18 +113,18 @@ func PrintProgress(state *RequestState, isTTY bool) {
 }
 
 type summaryLine struct {
-	TrackingID  string  `json:"tracking_id"`
-	Provider    string  `json:"provider"`
-	Model       string  `json:"model"`
-	TPS         *float64 `json:"tps"`
-	TTFT        *float64 `json:"ttft"`
-	TPOT        *float64 `json:"tpot"`
-	InputTokens  *int   `json:"input_tokens"`
-	OutputTokens *int   `json:"output_tokens"`
-	DurationMs  int64   `json:"duration_ms"`
-	StatusCode  *int    `json:"status_code"`
-	RequestPath string  `json:"request_path"`
-	UsageNote   string  `json:"usage_note"`
+	TrackingID   string   `json:"tracking_id"`
+	Provider     string   `json:"provider"`
+	Model        string   `json:"model"`
+	TPS          *float64 `json:"tps"`
+	TTFT         *float64 `json:"ttft"`
+	TPOT         *float64 `json:"tpot"`
+	InputTokens  *int     `json:"input_tokens"`
+	OutputTokens *int     `json:"output_tokens"`
+	DurationMs   int64    `json:"duration_ms"`
+	StatusCode   *int     `json:"status_code"`
+	RequestPath  string   `json:"request_path"`
+	UsageNote    string   `json:"usage_note"`
 }
 
 func PrintSummary(state *RequestState) {
@@ -148,6 +148,23 @@ func PrintSummary(state *RequestState) {
 		if snap.Metrics.TPOT > 0 {
 			v := snap.Metrics.TPOT
 			tpotPtr = &v
+		}
+	}
+	// TTFT is meaningful even when token usage is unavailable; fall back to first-content-token timing.
+	if ttftPtr == nil && snap.FirstContentTokenAt != nil {
+		secs := snap.FirstContentTokenAt.Sub(snap.StartedAt).Seconds()
+		if secs > 0 {
+			v := secs
+			ttftPtr = &v
+		}
+	}
+	// Non-streaming: "first content token" is only observable at end of response.
+	// Report TTFT as total request latency if no other TTFT is available.
+	if ttftPtr == nil && !snap.Streaming {
+		secs := float64(durationMs) / 1000
+		if secs > 0 {
+			v := secs
+			ttftPtr = &v
 		}
 	}
 
