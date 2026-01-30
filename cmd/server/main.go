@@ -503,6 +503,11 @@ func main() {
 			os.Exit(1)
 		}
 
+		if err := metricspersist.StartWriter(db); err != nil {
+			log.WithError(err).Error("failed to start metrics sqlite writer")
+			os.Exit(1)
+		}
+
 		// Start the main proxy service
 		managementasset.StartAutoUpdater(context.Background(), configFilePath)
 		cmd.StartService(cfg, configFilePath, password)
