@@ -92,6 +92,54 @@ type percentilesResponse struct {
 	Error string `json:"error"`
 }
 
+type bucketsResponse struct {
+	Meta struct {
+		Mode          string  `json:"mode"`
+		Bucket        string  `json:"bucket"`
+		Timezone      string  `json:"timezone"`
+		RequestedFrom *string `json:"requested_from"`
+		RequestedTo   *string `json:"requested_to"`
+		EffectiveFrom string  `json:"effective_from"`
+		EffectiveTo   string  `json:"effective_to"`
+		Filters       struct {
+			Provider  *string `json:"provider"`
+			Model     *string `json:"model"`
+			Streaming *bool   `json:"streaming"`
+		} `json:"filters"`
+	} `json:"meta"`
+	Success []struct {
+		Provider  string `json:"provider"`
+		Model     string `json:"model"`
+		Streaming bool   `json:"streaming"`
+		Buckets   []struct {
+			Start   string `json:"start"`
+			Count   int    `json:"count"`
+			Metrics struct {
+				TPSAvg        *float64 `json:"tps_avg"`
+				TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
+				TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
+				DurationMSAvg *int64   `json:"duration_ms_avg"`
+			} `json:"metrics"`
+		} `json:"buckets"`
+	} `json:"success"`
+	Failure []struct {
+		Provider  string `json:"provider"`
+		Model     string `json:"model"`
+		Streaming bool   `json:"streaming"`
+		Buckets   []struct {
+			Start   string `json:"start"`
+			Count   int    `json:"count"`
+			Metrics struct {
+				TPSAvg        *float64 `json:"tps_avg"`
+				TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
+				TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
+				DurationMSAvg *int64   `json:"duration_ms_avg"`
+			} `json:"metrics"`
+		} `json:"buckets"`
+	} `json:"failure"`
+	Error string `json:"error"`
+}
+
 func setupMetricsRouter(t *testing.T, h *management.Handler) *gin.Engine {
 	t.Helper()
 	r := gin.New()
@@ -199,6 +247,74 @@ func seedPercentilesMetricsDB(t *testing.T, dbPath string) {
 		// failure rows (count=2)
 		{id: "f1", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 4000, createdAt: "2026-01-01T00:40:00Z"},
 		{id: "f2", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: 5000, createdAt: "2026-01-01T00:50:00Z"},
+	}
+
+	for _, r := range rows {
+		if _, err := db.Exec(
+			insert,
+			r.id,
+			"openai",
+			"gpt-4o",
+			1,
+			r.tps,
+			r.ttft,
+			r.tpot,
+			nil,
+			nil,
+			nil,
+			r.duration,
+			r.status,
+			r.errInfo,
+			r.createdAt,
+		); err != nil {
+			t.Fatalf("insert metrics row %s: %v", r.id, err)
+		}
+	}
+}
+
+func seedBucketsMetricsDB(t *testing.T, dbPath string) {
+	t.Helper()
+
+	db, err := metricspersist.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := metricspersist.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	const insert = `INSERT INTO metrics (
+		request_id,
+		provider,
+		model,
+		streaming,
+		tps,
+		ttft,
+		tpot,
+		input_tokens,
+		output_tokens,
+		total_tokens,
+		duration_ms,
+		status_code,
+		error_info,
+		created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+
+	rows := []struct {
+		id        string
+		status    any
+		errInfo   any
+		tps       any
+		ttft      any
+		tpot      any
+		duration  any
+		createdAt string
+	}{
+		// Only the middle bucket (00:10-00:15) has data.
+		{id: "s_mid", status: 200, errInfo: nil, tps: 10.0, ttft: 0.0016, tpot: 0.01, duration: 1234, createdAt: "2026-01-01T00:10:30Z"},
+		{id: "f_mid", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 2345, createdAt: "2026-01-01T00:10:45Z"},
 	}
 
 	for _, r := range rows {
@@ -481,5 +597,88 @@ func TestManagementMetrics_PercentilesMode(t *testing.T) {
 	}
 	if f.Metrics.TPS.P50 != nil || f.Metrics.TPS.P95 != nil || f.Metrics.TPS.P99 != nil {
 		t.Fatalf("failure.tps percentiles expected null when no samples")
+	}
+}
+
+func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
+	cfg := &config.Config{}
+	h := management.NewHandler(cfg, "", nil)
+
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	seedBucketsMetricsDB(t, dbPath)
+	h.SetMetricsDBPath(dbPath)
+
+	r := setupMetricsRouter(t, h)
+	url := "/v0/management/metrics?mode=buckets&bucket=5m&from=2026-01-01T00:02:00Z&to=2026-01-01T00:17:00Z&provider=openai&model=gpt-4o&streaming=true"
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp bucketsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Meta.Mode != "buckets" {
+		t.Fatalf("meta.mode: got %q want %q", resp.Meta.Mode, "buckets")
+	}
+	if resp.Meta.Bucket != "5m" {
+		t.Fatalf("meta.bucket: got %q want %q", resp.Meta.Bucket, "5m")
+	}
+	if resp.Meta.Timezone != "UTC" {
+		t.Fatalf("meta.timezone: got %q want %q", resp.Meta.Timezone, "UTC")
+	}
+	if resp.Meta.EffectiveFrom != "2026-01-01T00:00:00Z" {
+		t.Fatalf("meta.effective_from: got %q want %q", resp.Meta.EffectiveFrom, "2026-01-01T00:00:00Z")
+	}
+	if resp.Meta.EffectiveTo != "2026-01-01T00:20:00Z" {
+		t.Fatalf("meta.effective_to: got %q want %q", resp.Meta.EffectiveTo, "2026-01-01T00:20:00Z")
+	}
+
+	if len(resp.Success) != 1 {
+		t.Fatalf("success groups: got %d want %d", len(resp.Success), 1)
+	}
+	if len(resp.Failure) != 1 {
+		t.Fatalf("failure groups: got %d want %d", len(resp.Failure), 1)
+	}
+
+	s := resp.Success[0]
+	if len(s.Buckets) != 4 {
+		t.Fatalf("success buckets length: got %d want %d", len(s.Buckets), 4)
+	}
+	// Empty bucket contract.
+	if s.Buckets[0].Count != 0 {
+		t.Fatalf("empty bucket count: got %d want %d", s.Buckets[0].Count, 0)
+	}
+	if s.Buckets[0].Metrics.TTFTMillisAvg != nil || s.Buckets[0].Metrics.TPOTMillisAvg != nil || s.Buckets[0].Metrics.DurationMSAvg != nil {
+		t.Fatalf("empty bucket metrics expected null")
+	}
+
+	// Middle bucket (00:10-00:15) has 1 success row.
+	if s.Buckets[2].Start != "2026-01-01T00:10:00Z" {
+		t.Fatalf("data bucket start: got %q want %q", s.Buckets[2].Start, "2026-01-01T00:10:00Z")
+	}
+	if s.Buckets[2].Count != 1 {
+		t.Fatalf("data bucket count: got %d want %d", s.Buckets[2].Count, 1)
+	}
+	if s.Buckets[2].Metrics.TTFTMillisAvg == nil || *s.Buckets[2].Metrics.TTFTMillisAvg != 2 {
+		t.Fatalf("ttft_ms_avg: got=%v want=%d", s.Buckets[2].Metrics.TTFTMillisAvg, 2)
+	}
+	if s.Buckets[2].Metrics.DurationMSAvg == nil || *s.Buckets[2].Metrics.DurationMSAvg != 1234 {
+		t.Fatalf("duration_ms_avg: got=%v want=%d", s.Buckets[2].Metrics.DurationMSAvg, 1234)
+	}
+
+	f := resp.Failure[0]
+	if len(f.Buckets) != 4 {
+		t.Fatalf("failure buckets length: got %d want %d", len(f.Buckets), 4)
+	}
+	if f.Buckets[0].Count != 0 {
+		t.Fatalf("failure empty bucket count: got %d want %d", f.Buckets[0].Count, 0)
+	}
+	if f.Buckets[0].Metrics.TTFTMillisAvg != nil || f.Buckets[0].Metrics.TPOTMillisAvg != nil || f.Buckets[0].Metrics.DurationMSAvg != nil {
+		t.Fatalf("failure empty bucket metrics expected null")
 	}
 }
