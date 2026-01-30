@@ -28,6 +28,16 @@ type metricsMeta struct {
 	EffectiveFrom string         `json:"effective_from"`
 	EffectiveTo   string         `json:"effective_to"`
 	Filters       metricsFilters `json:"filters"`
+
+	// Persistence is emitted only when best-effort persistence is degraded.
+	Persistence *metricsPersistenceMeta `json:"persistence,omitempty"`
+}
+
+type metricsPersistenceMeta struct {
+	Degraded       bool    `json:"degraded"`
+	DroppedTotal   uint64  `json:"dropped_total"`
+	LastDropAt     string  `json:"last_drop_at"`
+	LastDropReason *string `json:"last_drop_reason,omitempty"`
 }
 
 type metricsEnvelope[T any] struct {
@@ -147,6 +157,7 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 			EffectiveTo:   effectiveTo.Format(time.RFC3339),
 			Filters:       filters,
 		}
+		h.attachPersistenceMeta(&meta)
 		row, err := h.queryMetricsByRequestID(c.Request.Context(), requestID)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -217,6 +228,7 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		EffectiveTo:   effectiveTo.Format(time.RFC3339),
 		Filters:       filters,
 	}
+	h.attachPersistenceMeta(&meta)
 
 	switch mode {
 	case "percentiles":
@@ -260,6 +272,34 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		c.JSON(http.StatusOK, out)
 		return
 	}
+}
+
+func (h *Handler) attachPersistenceMeta(meta *metricsMeta) {
+	if h == nil || meta == nil {
+		return
+	}
+	fn := h.persistenceHealth
+	if fn == nil {
+		return
+	}
+	health := fn(h.nowUTC())
+	if !health.Degraded {
+		return
+	}
+	if health.LastDropAt.IsZero() {
+		return
+	}
+
+	out := metricsPersistenceMeta{
+		Degraded:     true,
+		DroppedTotal: health.DroppedTotal,
+		LastDropAt:   health.LastDropAt.UTC().Format(time.RFC3339),
+	}
+	if health.LastDropReason != nil {
+		r := string(*health.LastDropReason)
+		out.LastDropReason = &r
+	}
+	meta.Persistence = &out
 }
 
 func parseMetricsBucket(bucketRaw string) (time.Duration, string, error) {

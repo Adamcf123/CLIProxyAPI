@@ -80,8 +80,37 @@ Management Query API example (`GET /v0/management/metrics`, requires `X-Manageme
 ```bash
 curl -sS \
   -H "X-Management-Key: ${MANAGEMENT_KEY}" \
-  "http://127.0.0.1:${PORT}/v0/management/metrics?limit=10"
+  "http://127.0.0.1:${PORT}/v0/management/metrics?mode=percentiles"
 ```
+
+### Best-effort Metrics Persistence Contract
+
+Metrics persistence is **best-effort** by design: the request path must never block on SQLite writes.
+As a result, individual metric rows may be dropped under specific conditions.
+
+**Droppable scenarios (stable enum codes):**
+
+- `queue_full`: the internal writer queue is full (enqueue is non-blocking)
+- `writer_not_started`: the writer goroutine is not started yet (startup race / misconfiguration)
+- `insert_failure`: SQLite insert failed (I/O error, DB closed, schema issues, etc.)
+
+**Observability contract (`/v0/management/metrics`):**
+
+- `meta.persistence` is emitted **only when degraded**. When not degraded, the response JSON MUST NOT include `meta.persistence`.
+- When emitted, `meta.persistence` contains a **minimal safe field set**:
+  - `degraded` (boolean)
+  - `dropped_total` (process-lifetime counter)
+  - `last_drop_at` (RFC3339 UTC timestamp)
+  - `last_drop_reason` (optional; one of the enum codes above)
+
+**Quiet-period recovery:**
+
+- Degraded state is computed from `last_drop_at` using a fixed quiet period of **5m**.
+- If no new drops occur for 5 minutes, degraded automatically clears and `meta.persistence` disappears from responses.
+
+**Security boundary:**
+
+- `meta.persistence` MUST NOT include request ID lists, raw SQL errors, filesystem paths, or user input.
 
 ## Amp CLI Support
 
