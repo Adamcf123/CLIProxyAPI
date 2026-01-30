@@ -115,9 +115,10 @@ type bucketsResponse struct {
 		Model     string `json:"model"`
 		Streaming bool   `json:"streaming"`
 		Buckets   []struct {
-			Start   string `json:"start"`
-			Count   int    `json:"count"`
-			Metrics struct {
+			Start         string `json:"start"`
+			Count         int    `json:"count"`
+			CanceledCount int    `json:"canceled_count"`
+			Metrics       struct {
 				TPSAvg        *float64 `json:"tps_avg"`
 				TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
 				TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
@@ -130,9 +131,10 @@ type bucketsResponse struct {
 		Model     string `json:"model"`
 		Streaming bool   `json:"streaming"`
 		Buckets   []struct {
-			Start   string `json:"start"`
-			Count   int    `json:"count"`
-			Metrics struct {
+			Start         string `json:"start"`
+			Count         int    `json:"count"`
+			CanceledCount int    `json:"canceled_count"`
+			Metrics       struct {
 				TPSAvg        *float64 `json:"tps_avg"`
 				TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
 				TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
@@ -345,6 +347,8 @@ func seedBucketsMetricsDB(t *testing.T, dbPath string) {
 		{id: "f_mid", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 2345, createdAt: "2026-01-01T00:10:45Z"},
 		// Streaming failures can still have a 200 status_code, but are classified as failure when error_info is non-empty.
 		{id: "f_mid_200_err", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: nil, createdAt: "2026-01-01T00:10:50Z"},
+		// canceled rows should not pollute bucket metrics, but must be counted in canceled_count.
+		{id: "c_mid", status: 499, errInfo: nil, tps: 999.0, ttft: 9.9, tpot: 9.9, duration: 999999, createdAt: "2026-01-01T00:10:55Z"},
 	}
 
 	for _, r := range rows {
@@ -842,6 +846,9 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if s.Buckets[0].Count != 0 {
 		t.Fatalf("empty bucket count: got %d want %d", s.Buckets[0].Count, 0)
 	}
+	if s.Buckets[0].CanceledCount != 0 {
+		t.Fatalf("empty bucket canceled_count: got %d want %d", s.Buckets[0].CanceledCount, 0)
+	}
 	if s.Buckets[0].Metrics.TTFTMillisAvg != nil || s.Buckets[0].Metrics.TPOTMillisAvg != nil || s.Buckets[0].Metrics.DurationMSAvg != nil {
 		t.Fatalf("empty bucket metrics expected null")
 	}
@@ -852,6 +859,9 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	}
 	if s.Buckets[2].Count != 1 {
 		t.Fatalf("data bucket count: got %d want %d", s.Buckets[2].Count, 1)
+	}
+	if s.Buckets[2].CanceledCount != 1 {
+		t.Fatalf("data bucket canceled_count: got %d want %d", s.Buckets[2].CanceledCount, 1)
 	}
 	if s.Buckets[2].Metrics.TTFTMillisAvg == nil || *s.Buckets[2].Metrics.TTFTMillisAvg != 2 {
 		t.Fatalf("ttft_ms_avg: got=%v want=%d", s.Buckets[2].Metrics.TTFTMillisAvg, 2)
@@ -867,6 +877,9 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if f.Buckets[0].Count != 0 {
 		t.Fatalf("failure empty bucket count: got %d want %d", f.Buckets[0].Count, 0)
 	}
+	if f.Buckets[0].CanceledCount != 0 {
+		t.Fatalf("failure empty bucket canceled_count: got %d want %d", f.Buckets[0].CanceledCount, 0)
+	}
 	if f.Buckets[0].Metrics.TTFTMillisAvg != nil || f.Buckets[0].Metrics.TPOTMillisAvg != nil || f.Buckets[0].Metrics.DurationMSAvg != nil {
 		t.Fatalf("failure empty bucket metrics expected null")
 	}
@@ -877,5 +890,12 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	}
 	if f.Buckets[2].Count != 2 {
 		t.Fatalf("failure data bucket count: got %d want %d", f.Buckets[2].Count, 2)
+	}
+	if f.Buckets[2].CanceledCount != 1 {
+		t.Fatalf("failure data bucket canceled_count: got %d want %d", f.Buckets[2].CanceledCount, 1)
+	}
+	total := s.Buckets[2].Count + f.Buckets[2].Count + s.Buckets[2].CanceledCount
+	if total != 4 {
+		t.Fatalf("total count mismatch: got=%d want=%d", total, 4)
 	}
 }
