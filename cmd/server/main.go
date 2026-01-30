@@ -22,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricspersist"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/store"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator"
@@ -475,6 +476,29 @@ func main() {
 			cmd.WaitForCloudDeploy()
 			return
 		}
+
+		const metricsDBPath = "logs/metrics.db"
+		if err := os.MkdirAll(filepath.Dir(metricsDBPath), 0o755); err != nil {
+			log.WithError(err).Error("failed to create logs directory")
+			os.Exit(1)
+		}
+
+		db, err := metricspersist.InitDB(metricsDBPath)
+		if err != nil {
+			log.WithError(err).Error("failed to initialize metrics sqlite db")
+			os.Exit(1)
+		}
+		defer func() {
+			if err := db.Close(); err != nil {
+				log.WithError(err).Warn("failed to close metrics sqlite db")
+			}
+		}()
+
+		if err := metricspersist.Migrate(db); err != nil {
+			log.WithError(err).Error("failed to run metrics sqlite migrations")
+			os.Exit(1)
+		}
+
 		// Start the main proxy service
 		managementasset.StartAutoUpdater(context.Background(), configFilePath)
 		cmd.StartService(cfg, configFilePath, password)
