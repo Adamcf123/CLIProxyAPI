@@ -315,6 +315,8 @@ func seedBucketsMetricsDB(t *testing.T, dbPath string) {
 		// Only the middle bucket (00:10-00:15) has data.
 		{id: "s_mid", status: 200, errInfo: nil, tps: 10.0, ttft: 0.0016, tpot: 0.01, duration: 1234, createdAt: "2026-01-01T00:10:30Z"},
 		{id: "f_mid", status: 500, errInfo: nil, tps: nil, ttft: 0.5, tpot: nil, duration: 2345, createdAt: "2026-01-01T00:10:45Z"},
+		// Streaming failures can still have a 200 status_code, but are classified as failure when error_info is non-empty.
+		{id: "f_mid_200_err", status: 200, errInfo: "boom", tps: nil, ttft: nil, tpot: nil, duration: nil, createdAt: "2026-01-01T00:10:50Z"},
 	}
 
 	for _, r := range rows {
@@ -680,5 +682,13 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	}
 	if f.Buckets[0].Metrics.TTFTMillisAvg != nil || f.Buckets[0].Metrics.TPOTMillisAvg != nil || f.Buckets[0].Metrics.DurationMSAvg != nil {
 		t.Fatalf("failure empty bucket metrics expected null")
+	}
+
+	// Middle bucket (00:10-00:15) has 2 failure rows: one non-2xx status and one 200+error_info streaming failure.
+	if f.Buckets[2].Start != "2026-01-01T00:10:00Z" {
+		t.Fatalf("failure data bucket start: got %q want %q", f.Buckets[2].Start, "2026-01-01T00:10:00Z")
+	}
+	if f.Buckets[2].Count != 2 {
+		t.Fatalf("failure data bucket count: got %d want %d", f.Buckets[2].Count, 2)
 	}
 }
