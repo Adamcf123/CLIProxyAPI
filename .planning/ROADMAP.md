@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Query API** - 历史指标查询和分析接口
 - [x] **Phase 5: Streaming Failure Semantics** - 流式失败语义可追溯且不会污染聚合
 - [x] **Phase 6: Guaranteed Usage Publish** - 无 usage 场景也能落库，保证历史可追溯
-- [ ] **Phase 7: Docs & Traceability Cleanup** - 修复规划文档漂移（Requirements/Docs 与实现一致）
+- [x] **Phase 7: Docs & Traceability Cleanup** - 修复规划文档漂移（Requirements/Docs 与实现一致）
 - [ ] **Phase 8: Persistence Contract & Observability** - 明确 best-effort 持久化契约并补齐可观测性
 - [ ] **Phase 9: Cancel/Disconnect Semantics** - 明确客户端取消/断连的失败语义并锁定测试
 - [ ] **Phase 10: Request ID Robustness** - 强化 request_id 唯一性与冲突可见性，避免静默缺行
@@ -178,10 +178,10 @@ Plans:
 **Plans**: 4 plans in 1 wave
 
 Plans:
-- [ ] 07-01-PLAN.md — 对齐 REQUIREMENTS.md（METR-01..04）到 Phase 01 验证结论
-- [ ] 07-02-PLAN.md — 补齐 README 的 SQLite/Query API 指南 + 修复 MetricsPlugin 注释漂移
-- [ ] 07-03-PLAN.md — 修复 STATE.md + operator docs 的 JSONL 漂移（对齐 SQLite 单一来源）
-- [ ] 07-04-PLAN.md — 清理 docs/*.md 的 JSONL 遗留表述（对齐 SQLite 单一来源）
+- [x] 07-01-PLAN.md — 对齐 REQUIREMENTS.md（METR-01..04）到 Phase 01 验证结论
+- [x] 07-02-PLAN.md — 补齐 README 的 SQLite/Query API 指南 + 修复 MetricsPlugin 注释漂移
+- [x] 07-03-PLAN.md — 修复 STATE.md + operator docs 的 JSONL 漂移（对齐 SQLite 单一来源）
+- [x] 07-04-PLAN.md — 清理 docs/*.md 的 JSONL 遗留表述（对齐 SQLite 单一来源）
 
 ### Phase 8: Persistence Contract & Observability
 
@@ -264,7 +264,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Query API | 4/4 | Complete | 2026-01-30 |
 | 5. Streaming Failure Semantics | 3/3 | Complete | 2026-01-30 |
 | 6. Guaranteed Usage Publish | 5/5 | Complete | 2026-01-30 |
-| 7. Docs & Traceability Cleanup | 0/? | Planned | |
+| 7. Docs & Traceability Cleanup | 4/4 | Complete | 2026-01-31 |
 | 8. Persistence Contract & Observability | 0/? | Planned | |
 | 9. Cancel/Disconnect Semantics | 0/? | Planned | |
 | 10. Request ID Robustness | 0/? | Planned | |
