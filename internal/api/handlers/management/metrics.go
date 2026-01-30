@@ -21,6 +21,8 @@ type metricsFilters struct {
 
 type metricsMeta struct {
 	Mode          string         `json:"mode"`
+	Bucket        *string        `json:"bucket,omitempty"`
+	Timezone      string         `json:"timezone"`
 	RequestedFrom *string        `json:"requested_from"`
 	RequestedTo   *string        `json:"requested_to"`
 	EffectiveFrom string         `json:"effective_from"`
@@ -86,6 +88,32 @@ type metricsPercentilesResponse struct {
 	Failure []metricsPercentilesGroup `json:"failure"`
 }
 
+type metricsBucketsMetrics struct {
+	TPSAvg        *float64 `json:"tps_avg"`
+	TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
+	TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
+	DurationMSAvg *int64   `json:"duration_ms_avg"`
+}
+
+type metricsBucket struct {
+	Start   string                `json:"start"`
+	Count   int                   `json:"count"`
+	Metrics metricsBucketsMetrics `json:"metrics"`
+}
+
+type metricsBucketsGroup struct {
+	Provider  string          `json:"provider"`
+	Model     string          `json:"model"`
+	Streaming bool            `json:"streaming"`
+	Buckets   []metricsBucket `json:"buckets"`
+}
+
+type metricsBucketsResponse struct {
+	Meta    metricsMeta           `json:"meta"`
+	Success []metricsBucketsGroup `json:"success"`
+	Failure []metricsBucketsGroup `json:"failure"`
+}
+
 func (h *Handler) GetMetrics(c *gin.Context) {
 	if h == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})
@@ -101,7 +129,7 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, metricsEnvelope[any]{
 			Error: err.Error(),
-			Meta:  metricsMeta{Filters: filters},
+			Meta:  metricsMeta{Timezone: "UTC", Filters: filters},
 		})
 		return
 	}
@@ -112,6 +140,7 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		_, _, effectiveFrom, effectiveTo, _ := parseMetricsTimeRange(h.nowUTC, "", "")
 		meta := metricsMeta{
 			Mode:          "request_id",
+			Timezone:      "UTC",
 			RequestedFrom: nil,
 			RequestedTo:   nil,
 			EffectiveFrom: effectiveFrom.Format(time.RFC3339),
@@ -145,8 +174,9 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, metricsEnvelope[any]{
 			Error: "mode is required",
 			Meta: metricsMeta{
-				Mode:    mode,
-				Filters: filters,
+				Mode:     mode,
+				Timezone: "UTC",
+				Filters:  filters,
 			},
 		})
 		return
@@ -155,8 +185,9 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, metricsEnvelope[any]{
 			Error: "invalid mode",
 			Meta: metricsMeta{
-				Mode:    mode,
-				Filters: filters,
+				Mode:     mode,
+				Timezone: "UTC",
+				Filters:  filters,
 			},
 		})
 		return
@@ -169,8 +200,9 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, metricsEnvelope[any]{
 			Error: err.Error(),
 			Meta: metricsMeta{
-				Mode:    mode,
-				Filters: filters,
+				Mode:     mode,
+				Timezone: "UTC",
+				Filters:  filters,
 			},
 		})
 		return
@@ -178,6 +210,7 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 
 	meta := metricsMeta{
 		Mode:          mode,
+		Timezone:      "UTC",
 		RequestedFrom: requestedFrom,
 		RequestedTo:   requestedTo,
 		EffectiveFrom: effectiveFrom.Format(time.RFC3339),
@@ -198,13 +231,80 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		out.Meta = meta
 		c.JSON(http.StatusOK, out)
 		return
-	default:
-		c.JSON(http.StatusNotImplemented, metricsEnvelope[any]{
-			Error: "mode not implemented",
-			Meta:  meta,
-		})
+	case "buckets":
+		bucketRaw := strings.TrimSpace(c.Query("bucket"))
+		bucketDur, bucketLabel, err := parseMetricsBucket(bucketRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, metricsEnvelope[any]{
+				Error: err.Error(),
+				Meta:  meta,
+			})
+			return
+		}
+
+		alignedFrom := floorToBucketUTC(effectiveFrom.UTC(), bucketDur)
+		alignedTo := ceilToBucketUTC(effectiveTo.UTC(), bucketDur)
+		meta.Bucket = &bucketLabel
+		meta.EffectiveFrom = alignedFrom.Format(time.RFC3339)
+		meta.EffectiveTo = alignedTo.Format(time.RFC3339)
+
+		out, err := h.queryMetricsBuckets(c.Request.Context(), alignedFrom, alignedTo, bucketDur, filters)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, metricsEnvelope[any]{
+				Error: "failed to query metrics",
+				Meta:  meta,
+			})
+			return
+		}
+		out.Meta = meta
+		c.JSON(http.StatusOK, out)
 		return
 	}
+}
+
+func parseMetricsBucket(bucketRaw string) (time.Duration, string, error) {
+	s := strings.TrimSpace(bucketRaw)
+	if s == "" {
+		return 0, "", errBadRequest("bucket is required")
+	}
+	s = strings.ToLower(s)
+	switch s {
+	case "1m":
+		return time.Minute, s, nil
+	case "5m":
+		return 5 * time.Minute, s, nil
+	case "15m":
+		return 15 * time.Minute, s, nil
+	case "1h":
+		return time.Hour, s, nil
+	case "1d":
+		return 24 * time.Hour, s, nil
+	default:
+		return 0, "", errBadRequest("invalid bucket")
+	}
+}
+
+func floorToBucketUTC(t time.Time, bucket time.Duration) time.Time {
+	t = t.UTC()
+	if bucket <= 0 {
+		return t
+	}
+	b := bucket.Nanoseconds()
+	n := t.UnixNano()
+	return time.Unix(0, (n/b)*b).UTC()
+}
+
+func ceilToBucketUTC(t time.Time, bucket time.Duration) time.Time {
+	t = t.UTC()
+	if bucket <= 0 {
+		return t
+	}
+	b := bucket.Nanoseconds()
+	n := t.UnixNano()
+	if n%b == 0 {
+		return t
+	}
+	return time.Unix(0, ((n+b-1)/b)*b).UTC()
 }
 
 type metricsPercentilesAgg struct {
@@ -376,6 +476,212 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		Success: buildGroups(successAgg),
 		Failure: buildGroups(failureAgg),
 	}, nil
+}
+
+func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, bucket time.Duration, filters metricsFilters) (metricsBucketsResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	db, err := h.openMetricsReadDB()
+	if err != nil {
+		// Keep buckets mode consistent with percentiles: missing DB path is treated as empty.
+		msg := err.Error()
+		if strings.Contains(msg, "unable to open database file") || strings.Contains(msg, "no such file or directory") {
+			return metricsBucketsResponse{}, nil
+		}
+		return metricsBucketsResponse{}, err
+	}
+
+	if bucket <= 0 {
+		return metricsBucketsResponse{}, errBadRequest("invalid bucket")
+	}
+	bucketSeconds := int64(bucket.Seconds())
+	if bucketSeconds <= 0 {
+		return metricsBucketsResponse{}, errBadRequest("invalid bucket")
+	}
+
+	const successFlagCase = "CASE WHEN status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN 1 ELSE 0 END"
+	q := "SELECT " +
+		"provider, " +
+		"model, " +
+		"streaming, " +
+		successFlagCase + " AS success_flag, " +
+		"((unixepoch(created_at) / ?) * ?) AS bucket_start, " +
+		"COUNT(*) AS count, " +
+		"AVG(tps) AS tps_avg, " +
+		"AVG(ttft) AS ttft_avg, " +
+		"AVG(tpot) AS tpot_avg, " +
+		"AVG(duration_ms) AS duration_ms_avg " +
+		"FROM metrics " +
+		"WHERE unixepoch(created_at) >= unixepoch(?) AND unixepoch(created_at) < unixepoch(?)"
+
+	args := []any{bucketSeconds, bucketSeconds, from.Format(time.RFC3339), to.Format(time.RFC3339)}
+	if filters.Provider != nil {
+		q += " AND provider = ?"
+		args = append(args, *filters.Provider)
+	}
+	if filters.Model != nil {
+		q += " AND model = ?"
+		args = append(args, *filters.Model)
+	}
+	if filters.Streaming != nil {
+		q += " AND streaming = ?"
+		if *filters.Streaming {
+			args = append(args, int64(1))
+		} else {
+			args = append(args, int64(0))
+		}
+	}
+
+	q += " GROUP BY provider, model, streaming, success_flag, bucket_start"
+	q += " ORDER BY provider ASC, model ASC, streaming ASC, success_flag ASC, bucket_start ASC"
+
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table: metrics") {
+			return metricsBucketsResponse{}, nil
+		}
+		return metricsBucketsResponse{}, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	axisStarts := buildBucketAxis(from.UTC(), to.UTC(), bucket)
+
+	type bucketAgg struct {
+		Count   int
+		Metrics metricsBucketsMetrics
+	}
+
+	successAgg := make(map[metricsPercentilesKey]map[int64]bucketAgg)
+	failureAgg := make(map[metricsPercentilesKey]map[int64]bucketAgg)
+
+	for rows.Next() {
+		var (
+			providerVal   string
+			modelVal      string
+			streamingVal  int64
+			successFlag   int64
+			bucketStart   int64
+			countVal      int64
+			tpsAvg        sql.NullFloat64
+			ttftAvg       sql.NullFloat64
+			tpotAvg       sql.NullFloat64
+			durationMSAvg sql.NullFloat64
+		)
+		if err := rows.Scan(
+			&providerVal,
+			&modelVal,
+			&streamingVal,
+			&successFlag,
+			&bucketStart,
+			&countVal,
+			&tpsAvg,
+			&ttftAvg,
+			&tpotAvg,
+			&durationMSAvg,
+		); err != nil {
+			return metricsBucketsResponse{}, err
+		}
+
+		key := metricsPercentilesKey{Provider: providerVal, Model: modelVal, Streaming: streamingVal != 0}
+		target := failureAgg
+		if successFlag != 0 {
+			target = successAgg
+		}
+		m := target[key]
+		if m == nil {
+			m = make(map[int64]bucketAgg)
+			target[key] = m
+		}
+
+		var metricsOut metricsBucketsMetrics
+		if tpsAvg.Valid {
+			v := tpsAvg.Float64
+			metricsOut.TPSAvg = &v
+		}
+		if ttftAvg.Valid {
+			ms := secondsToMillisInt(ttftAvg.Float64)
+			metricsOut.TTFTMillisAvg = &ms
+		}
+		if tpotAvg.Valid {
+			ms := secondsToMillisInt(tpotAvg.Float64)
+			metricsOut.TPOTMillisAvg = &ms
+		}
+		if durationMSAvg.Valid {
+			ms := int64(math.Round(durationMSAvg.Float64))
+			metricsOut.DurationMSAvg = &ms
+		}
+
+		m[bucketStart] = bucketAgg{Count: int(countVal), Metrics: metricsOut}
+	}
+	if err := rows.Err(); err != nil {
+		return metricsBucketsResponse{}, err
+	}
+
+	buildGroups := func(groups map[metricsPercentilesKey]map[int64]bucketAgg) []metricsBucketsGroup {
+		out := make([]metricsBucketsGroup, 0, len(groups))
+		for key, byBucket := range groups {
+			bucketsOut := make([]metricsBucket, 0, len(axisStarts))
+			for _, start := range axisStarts {
+				startSec := start.Unix()
+				agg, ok := byBucket[startSec]
+				if !ok {
+					bucketsOut = append(bucketsOut, metricsBucket{
+						Start:   start.Format(time.RFC3339),
+						Count:   0,
+						Metrics: metricsBucketsMetrics{},
+					})
+					continue
+				}
+				bucketsOut = append(bucketsOut, metricsBucket{
+					Start:   start.Format(time.RFC3339),
+					Count:   agg.Count,
+					Metrics: agg.Metrics,
+				})
+			}
+
+			out = append(out, metricsBucketsGroup{
+				Provider:  key.Provider,
+				Model:     key.Model,
+				Streaming: key.Streaming,
+				Buckets:   bucketsOut,
+			})
+		}
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Provider != out[j].Provider {
+				return out[i].Provider < out[j].Provider
+			}
+			if out[i].Model != out[j].Model {
+				return out[i].Model < out[j].Model
+			}
+			if out[i].Streaming != out[j].Streaming {
+				return !out[i].Streaming && out[j].Streaming
+			}
+			return false
+		})
+		return out
+	}
+
+	return metricsBucketsResponse{
+		Success: buildGroups(successAgg),
+		Failure: buildGroups(failureAgg),
+	}, nil
+}
+
+func buildBucketAxis(from, to time.Time, bucket time.Duration) []time.Time {
+	from = from.UTC()
+	to = to.UTC()
+	if bucket <= 0 || !from.Before(to) {
+		return nil
+	}
+	var out []time.Time
+	for t := from; t.Before(to); t = t.Add(bucket) {
+		out = append(out, t)
+	}
+	return out
 }
 
 func buildMetricsPercentiles(agg *metricsPercentilesAgg) metricsPercentilesMetrics {
