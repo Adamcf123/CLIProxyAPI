@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricslog"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricspersist"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
@@ -178,6 +180,25 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	if state != nil && !state.StartedAt.IsZero() {
 		duration := now.Sub(state.StartedAt).Milliseconds()
 		line.DurationMS = &duration
+	}
+
+	// Persist to SQLite asynchronously (off request path).
+	// Duplicates are handled by the DB unique constraint on request_id.
+	if requestID := logging.GetRequestID(ctx); requestID != "" {
+		metricspersist.Enqueue(metricspersist.MetricRecord{
+			RequestID:    requestID,
+			Provider:     record.Provider,
+			Model:        record.Model,
+			TPS:          line.TPS,
+			TTFT:         line.TTFT,
+			TPOT:         line.TPOT,
+			InputTokens:  line.InputTokens,
+			OutputTokens: line.OutputTokens,
+			TotalTokens:  line.TotalTokens,
+			DurationMS:   line.DurationMS,
+			StatusCode:   line.StatusCode,
+			ErrorInfo:    line.ErrorInfo,
+		})
 	}
 
 	// Enqueue for async write (non-blocking, drops on full queue).
