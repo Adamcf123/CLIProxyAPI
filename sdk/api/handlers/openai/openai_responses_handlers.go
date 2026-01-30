@@ -269,6 +269,9 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStreamWithPrefetched(c *gin.
 			if errMsg.StatusCode > 0 {
 				status = errMsg.StatusCode
 			}
+			// Best-effort: set status before writing terminal SSE error payload.
+			// If headers were already committed by prior writes/flushes, clients may still see 200.
+			c.Status(status)
 			errText := http.StatusText(status)
 			if errMsg.Error != nil && errMsg.Error.Error() != "" {
 				errText = errMsg.Error.Error()
