@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 ## Current Position
 
 Phase: 3 of 4 (Persistence)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-01-30 — Completed 03-01-PLAN.md (SQLite schema + migrations wiring)
+Last activity: 2026-01-30 — Completed 03-02-PLAN.md (Async SQLite writer + MetricsPlugin integration)
 
-Progress: [██████████░░] 82% (9/11 plans)
+Progress: [███████████░] 91% (10/11 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: 9 min
-- Total execution time: 1.0 hours
+- Total plans completed: 10
+- Average duration: 7 min
+- Total execution time: 1.2 hours
 
 **By Phase:**
 
@@ -29,10 +29,10 @@ Progress: [██████████░░] 82% (9/11 plans)
 |-------|-------|-------|----------|
 | 01-metrics-foundation | 4 | 4 | 4 min |
 | 02-metrics-collection | 4 | 4 | 11 min |
-| 03-persistence | 1 | 3 | 5 min |
+| 03-persistence | 2 | 3 | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 19 min, 12 min, 6 min, 5 min
+- Last 5 plans: 19 min, 12 min, 6 min, 5 min, 5 min
 - Trend: ↓ (improving)
 
 *Updated after each plan completion*
@@ -69,6 +69,8 @@ Recent decisions affecting current work:
 **From Phase 03-persistence:**
 - Startup runs embedded SQLite migrations (goose); failures must fail-fast (os.Exit(1))
 - SQLite InitDB uses modernc.org/sqlite with WAL/NORMAL/busy_timeout PRAGMAs and a single underlying connection for consistency
+- SQLite metrics persistence uses a non-blocking enqueue + background writer; queue-full drops to avoid request latency impact
+- SQLite metrics rows are keyed by request_id for de-duplication; request_path is excluded from DB
 
 ### Pending Todos
 
@@ -85,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-30 07:03Z
-Stopped at: Completed 03-01-PLAN.md (SQLite schema + migrations wiring)
+Last session: 2026-01-30 07:30Z
+Stopped at: Completed 03-02-PLAN.md (Async SQLite writer + MetricsPlugin integration)
 Resume file: None
