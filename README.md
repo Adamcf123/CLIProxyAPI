@@ -64,6 +64,25 @@ CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)
 
+## Metrics (TPS/TTFT/TPOT)
+
+CLIProxyAPI persists request metrics (TPS/TTFT/TPOT) into a local SQLite database file: `logs/metrics.db`.
+
+SQLite query example (read-only):
+
+```bash
+sqlite3 logs/metrics.db \
+  "SELECT created_at, provider, model, streaming, tps, ttft, tpot, status_code FROM metrics ORDER BY created_at DESC LIMIT 10;"
+```
+
+Management Query API example (`GET /v0/management/metrics`, requires `X-Management-Key`):
+
+```bash
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:${PORT}/v0/management/metrics?limit=10"
+```
+
 ## Amp CLI Support
 
 CLIProxyAPI includes integrated support for [Amp CLI](https://ampcode.com) and Amp IDE extensions, enabling you to use your Google/ChatGPT/Claude OAuth subscriptions with Amp's coding tools:
