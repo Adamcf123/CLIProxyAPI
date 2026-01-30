@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
@@ -77,4 +78,64 @@ func TestMetricsPlugin_HandleUsage_MapsLastErrorToErrorInfo(t *testing.T) {
 			t.Fatalf("expected ErrorInfo to be nil when LastError is empty")
 		}
 	})
+}
+
+func TestMetricsPlugin_HandleUsage_CanceledPersists499AndNilErrorInfo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	origEnqueue := enqueueMetricRecord
+	defer func() { enqueueMetricRecord = origEnqueue }()
+
+	var captured *metricspersist.MetricRecord
+	enqueueMetricRecord = func(r metricspersist.MetricRecord) {
+		rc := r
+		captured = &rc
+	}
+
+	p := NewMetricsPlugin(nil)
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	state := NewRequestState(false, "gpt-5.2")
+	// Ensure the non-canceled path would be able to compute rates if it ran.
+	state.StartedAt = time.Now().Add(-1 * time.Second)
+	state.SetStatusCode(200)
+	state.MarkClientCanceled()
+	AttachRequestState(ginCtx, state)
+
+	ctx := logging.WithRequestID(context.Background(), "req_test")
+	ctx = context.WithValue(ctx, "gin", ginCtx)
+	record := usage.Record{
+		Provider: "openai",
+		Model:    "gpt-5.2",
+		Detail: usage.Detail{
+			OutputTokens: 100,
+			TotalTokens:  100,
+		},
+	}
+	// Sanity: canceled is expressed only via status_code=499, not LastError.
+	if snap := state.Snapshot(); !snap.IsClientCanceled() || snap.LastError != "" {
+		t.Fatalf("expected precondition: canceled=true and LastError empty")
+	}
+
+	p.HandleUsage(ctx, record)
+
+	if captured == nil {
+		t.Fatalf("expected MetricRecord to be enqueued")
+	}
+	if captured.StatusCode == nil || *captured.StatusCode != 499 {
+		got := int64(0)
+		if captured.StatusCode != nil {
+			got = *captured.StatusCode
+		}
+		t.Fatalf("expected StatusCode=499, got %d", got)
+	}
+	if captured.ErrorInfo != nil {
+		t.Fatalf("expected ErrorInfo to be nil for canceled")
+	}
+
+	// canceled requests must not be aggregated into TPSCollector-derived metrics.
+	if snap := state.Snapshot(); snap.Metrics != nil {
+		t.Fatalf("expected RequestState.Metrics to remain nil for canceled request")
+	}
 }
