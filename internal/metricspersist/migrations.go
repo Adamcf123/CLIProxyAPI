@@ -25,5 +25,10 @@ func Migrate(db *sql.DB) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 
+	// Enforce retention policy at startup to keep DB size stable.
+	if _, err := Cleanup(db, defaultRetentionDays); err != nil {
+		return fmt.Errorf("cleanup old metrics: %w", err)
+	}
+
 	return nil
 }
