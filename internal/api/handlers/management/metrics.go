@@ -46,11 +46,34 @@ type metricsEnvelope[T any] struct {
 	Error string      `json:"error,omitempty"`
 }
 
+type metricsOutcome string
+
+const (
+	metricsOutcomeSuccess  metricsOutcome = "success"
+	metricsOutcomeFailure  metricsOutcome = "failure"
+	metricsOutcomeCanceled metricsOutcome = "canceled"
+)
+
+func classifyMetricsOutcome(statusCode *int64, errorInfo *string) metricsOutcome {
+	// Hard-cutover contract: status_code=499 is the canonical canceled signal.
+	if statusCode != nil && *statusCode == 499 {
+		return metricsOutcomeCanceled
+	}
+	if statusCode != nil && *statusCode >= 200 && *statusCode < 300 {
+		if errorInfo == nil || strings.TrimSpace(*errorInfo) == "" {
+			return metricsOutcomeSuccess
+		}
+	}
+	return metricsOutcomeFailure
+}
+
 type metricsRow struct {
 	RequestID    string   `json:"request_id"`
 	Provider     string   `json:"provider"`
 	Model        string   `json:"model"`
 	Streaming    bool     `json:"streaming"`
+	Outcome      string   `json:"outcome"`
+	Status       string   `json:"status"`
 	StatusCode   *int64   `json:"status_code"`
 	ErrorInfo    *string  `json:"error_info"`
 	CreatedAt    string   `json:"created_at"`
@@ -911,6 +934,9 @@ func (h *Handler) queryMetricsByRequestID(ctx context.Context, requestID string)
 	out.DurationMS = nullInt64Ptr(durMS)
 	out.StatusCode = nullInt64Ptr(statusCode)
 	out.ErrorInfo = nullStringPtr(errorInfo)
+	outcome := classifyMetricsOutcome(out.StatusCode, out.ErrorInfo)
+	out.Outcome = string(outcome)
+	out.Status = string(outcome)
 	out.InputTokens = nullInt64Ptr(inTok)
 	out.OutputTokens = nullInt64Ptr(outTok)
 	out.TotalTokens = nullInt64Ptr(totalTok)
