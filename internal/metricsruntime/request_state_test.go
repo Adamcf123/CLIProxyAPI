@@ -158,6 +158,12 @@ func TestRequestState_LastErrorOverridesCanceledAndUses504ForDeadline(t *testing
 	state = NewRequestState(false, "gpt-5.2")
 	state.MarkClientCanceled()
 	state.SetLastError(errors.New("boom"))
+	if snap := state.Snapshot(); snap.IsClientCanceled() {
+		t.Fatalf("expected canceled to be cleared by LastError")
+	}
+	if snap := state.Snapshot(); snap.LastError == "" {
+		t.Fatalf("expected LastError to be set")
+	}
 	if snap := state.Snapshot(); snap.StatusCode != statusInternalServerError {
 		t.Fatalf("expected status_code=%d, got %d", statusInternalServerError, snap.StatusCode)
 	}
