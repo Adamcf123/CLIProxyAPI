@@ -2,24 +2,31 @@ package metricsruntime
 
 import (
 	"bytes"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
+	"github.com/tidwall/gjson"
 )
 
 type RequestState struct {
 	mu sync.RWMutex
 
-	TrackingID     string
-	StartedAt      time.Time
-	FirstTokenAt   *time.Time
-	Streaming      bool
-	RequestedModel string
-	Provider       string
-	Model          string
+	TrackingID string
+	StartedAt  time.Time
+	// FirstContentTokenAt records when the first user-visible content token is observed
+	// in a streaming response (not merely a metadata/role chunk or keep-alive).
+	FirstContentTokenAt *time.Time
+	// ContentTokenChunks counts how many chunks contained user-visible content.
+	// This is used as a confidence signal for TPS/TPOT on streaming responses.
+	ContentTokenChunks int
+	Streaming          bool
+	RequestedModel     string
+	Provider           string
+	Model              string
 
 	RequestPath string
 	StatusCode  int
@@ -34,13 +41,14 @@ type RequestState struct {
 }
 
 type RequestStateSnapshot struct {
-	TrackingID     string
-	StartedAt      time.Time
-	FirstTokenAt   *time.Time
-	Streaming      bool
-	RequestedModel string
-	Provider       string
-	Model          string
+	TrackingID          string
+	StartedAt           time.Time
+	FirstContentTokenAt *time.Time
+	ContentTokenChunks  int
+	Streaming           bool
+	RequestedModel      string
+	Provider            string
+	Model               string
 
 	RequestPath string
 	StatusCode  int
@@ -72,19 +80,20 @@ func (s *RequestState) Snapshot() RequestStateSnapshot {
 	defer s.mu.RUnlock()
 
 	snap := RequestStateSnapshot{
-		TrackingID:     s.TrackingID,
-		StartedAt:      s.StartedAt,
-		Streaming:      s.Streaming,
-		RequestedModel: s.RequestedModel,
-		Provider:       s.Provider,
-		Model:          s.Model,
-		RequestPath:    s.RequestPath,
-		StatusCode:     s.StatusCode,
-		LastError:      s.LastError,
+		TrackingID:         s.TrackingID,
+		StartedAt:          s.StartedAt,
+		Streaming:          s.Streaming,
+		RequestedModel:     s.RequestedModel,
+		Provider:           s.Provider,
+		Model:              s.Model,
+		RequestPath:        s.RequestPath,
+		StatusCode:         s.StatusCode,
+		LastError:          s.LastError,
+		ContentTokenChunks: s.ContentTokenChunks,
 	}
-	if s.FirstTokenAt != nil {
-		t := *s.FirstTokenAt
-		snap.FirstTokenAt = &t
+	if s.FirstContentTokenAt != nil {
+		t := *s.FirstContentTokenAt
+		snap.FirstContentTokenAt = &t
 	}
 	if s.InputTokens != nil {
 		v := *s.InputTokens
@@ -212,7 +221,10 @@ func GetRequestState(c *gin.Context) (*RequestState, bool) {
 	return state, ok
 }
 
-func MaybeRecordFirstToken(c *gin.Context, chunk []byte, now time.Time) {
+// MaybeRecordFirstContentToken records TTFT when the first content token is observed.
+// "Content" here means user-visible generation output (e.g. delta.content / delta.text),
+// not role/metadata chunks nor SSE keep-alives.
+func MaybeRecordFirstContentToken(c *gin.Context, chunk []byte, now time.Time) {
 	state, ok := GetRequestState(c)
 	if !ok || state == nil {
 		return
@@ -223,20 +235,169 @@ func MaybeRecordFirstToken(c *gin.Context, chunk []byte, now time.Time) {
 	if now.IsZero() {
 		return
 	}
-
-	trimmed := bytes.TrimSpace(chunk)
-	if len(trimmed) == 0 {
+	if !chunkHasContentToken(chunk) {
 		return
 	}
-	// Filter the default SSE keep-alive comment heartbeat.
-	if bytes.Equal(trimmed, []byte(": keep-alive")) {
-		return
-	}
+	state.mu.Lock()
+	state.ContentTokenChunks++
+	state.mu.Unlock()
 
 	state.firstTokenOnce.Do(func() {
 		t := now
 		state.mu.Lock()
-		state.FirstTokenAt = &t
+		state.FirstContentTokenAt = &t
 		state.mu.Unlock()
 	})
+}
+
+func chunkHasContentToken(chunk []byte) bool {
+	trimmed := bytes.TrimSpace(chunk)
+	if len(trimmed) == 0 {
+		return false
+	}
+	// Filter SSE comment heartbeats / keep-alives (": ...").
+	if len(trimmed) > 0 && trimmed[0] == ':' {
+		return false
+	}
+	if bytes.Equal(trimmed, []byte(": keep-alive")) {
+		return false
+	}
+
+	// SSE: parse data: lines and inspect payload.
+	if looksLikeSSE(trimmed) {
+		for _, payload := range extractSSEDataPayloads(trimmed) {
+			p := bytes.TrimSpace(payload)
+			if len(p) == 0 {
+				continue
+			}
+			if bytes.Equal(p, []byte("[DONE]")) {
+				continue
+			}
+			if jsonHasContentToken(p) {
+				return true
+			}
+			// Non-JSON data payload; treat as content.
+			if p[0] != '{' && p[0] != '[' {
+				return true
+			}
+		}
+		return false
+	}
+
+	return jsonHasContentToken(trimmed)
+}
+
+func looksLikeSSE(b []byte) bool {
+	// Cheap sniffing for SSE frames.
+	if bytes.HasPrefix(b, []byte("event:")) || bytes.HasPrefix(b, []byte("data:")) {
+		return true
+	}
+	if bytes.Contains(b, []byte("\ndata:")) || bytes.Contains(b, []byte("\nevent:")) {
+		return true
+	}
+	return false
+}
+
+func extractSSEDataPayloads(b []byte) [][]byte {
+	// SSE allows multiple data: lines; each is part of the same event.
+	// We treat each data: line as a candidate payload.
+	lines := bytes.Split(b, []byte("\n"))
+	var out [][]byte
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		out = append(out, payload)
+	}
+	return out
+}
+
+func jsonHasContentToken(payload []byte) bool {
+	p := bytes.TrimSpace(payload)
+	if len(p) == 0 {
+		return false
+	}
+	if bytes.Equal(p, []byte("[DONE]")) {
+		return false
+	}
+	if p[0] != '{' && p[0] != '[' {
+		return false
+	}
+
+	root := gjson.ParseBytes(p)
+	if !root.Exists() {
+		return false
+	}
+
+	// OpenAI streaming: choices[].delta.content or choices[].text
+	choices := root.Get("choices")
+	if choices.Exists() && choices.IsArray() {
+		has := false
+		choices.ForEach(func(_, choice gjson.Result) bool {
+			if d := choice.Get("delta"); d.Exists() {
+				if c := d.Get("content"); c.Type == gjson.String && strings.TrimSpace(c.String()) != "" {
+					has = true
+					return false
+				}
+				if t := d.Get("text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+					has = true
+					return false
+				}
+			}
+			if t := choice.Get("text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+				has = true
+				return false
+			}
+			if m := choice.Get("message"); m.Exists() {
+				if c := m.Get("content"); c.Type == gjson.String && strings.TrimSpace(c.String()) != "" {
+					has = true
+					return false
+				}
+			}
+			return true
+		})
+		if has {
+			return true
+		}
+	}
+
+	// Anthropic streaming: delta.text or content_block.text
+	if t := root.Get("delta.text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+		return true
+	}
+	if t := root.Get("content_block.text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+		return true
+	}
+	// Legacy-style completions.
+	if t := root.Get("completion"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+		return true
+	}
+
+	// Generic fallbacks (string fields only).
+	if t := root.Get("text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+		return true
+	}
+	if c := root.Get("content"); c.Type == gjson.String && strings.TrimSpace(c.String()) != "" {
+		return true
+	}
+
+	// content as array of blocks: [{"type":"text","text":"..."}, ...]
+	contentArr := root.Get("content")
+	if contentArr.Exists() && contentArr.IsArray() {
+		has := false
+		contentArr.ForEach(func(_, block gjson.Result) bool {
+			if t := block.Get("text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+				has = true
+				return false
+			}
+			return true
+		})
+		if has {
+			return true
+		}
+	}
+
+	return false
 }

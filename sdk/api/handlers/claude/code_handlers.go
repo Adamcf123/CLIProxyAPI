@@ -80,6 +80,14 @@ func (h *ClaudeCodeAPIHandler) ClaudeMessages(c *gin.Context) {
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	if !streamResult.Exists() || streamResult.Type == gjson.False {
+		modelName := gjson.GetBytes(rawJSON, "model").String()
+		state := metricsruntime.NewRequestState(false, modelName)
+		state.SetProvider(Claude)
+		metricsruntime.AttachRequestState(c, state)
+		defer func() {
+			state.SetRequestPath(c.Request.URL.Path)
+			state.SetStatusCode(c.Writer.Status())
+		}()
 		h.handleNonStreamingResponse(c, rawJSON)
 	} else {
 		h.handleStreamingResponse(c, rawJSON)
@@ -221,6 +229,17 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 	}
 
 	modelName := gjson.GetBytes(rawJSON, "model").String()
+	// Attach state early so StartedAt measures from request start, not from
+	// when the first upstream chunk arrives.
+	state := metricsruntime.NewRequestState(true, modelName)
+	state.SetProvider(Claude)
+	metricsruntime.AttachRequestState(c, state)
+	stop := metricsruntime.StartLiveDisplay(state)
+	defer stop()
+	defer func() {
+		state.SetRequestPath(c.Request.URL.Path)
+		state.SetStatusCode(c.Writer.Status())
+	}()
 
 	// Create a cancellable context for the backend client request
 	// This allows proper cleanup and cancellation of ongoing requests
@@ -235,8 +254,6 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 	}
 
 	// Peek at the first chunk to determine success or failure before setting headers.
-	// State must be attached BEFORE any write/flush to ensure TTFT captures
-	// the real first token time.
 	for {
 		select {
 		case <-c.Request.Context().Done():
@@ -265,25 +282,12 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 				return
 			}
 
-			// Success! Set headers and attach state BEFORE any write/flush.
+			// Success! Set headers before any write/flush.
 			setSSEHeaders()
 
-			// Attach state BEFORE writing any chunks to ensure TTFT is accurate.
-			state := metricsruntime.NewRequestState(true, modelName)
-			state.SetProvider(Claude)
-			metricsruntime.AttachRequestState(c, state)
-			stop := metricsruntime.StartLiveDisplay(state)
-			defer stop()
-
 			// Forward the prefetched chunk through ForwardStream to ensure
-			// unified TTFT sampling (first chunk triggers MaybeRecordFirstToken).
+			// unified TTFT sampling (first content token triggers MaybeRecordFirstContentToken).
 			h.forwardClaudeStreamWithPrefetched(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan, chunk)
-
-			state.SetRequestPath(c.Request.URL.Path)
-			state.SetStatusCode(c.Writer.Status())
-			if state.Metrics == nil {
-				metricsruntime.PrintSummary(state)
-			}
 			return
 		}
 	}
