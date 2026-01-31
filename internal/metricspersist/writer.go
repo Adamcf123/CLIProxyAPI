@@ -152,7 +152,8 @@ func (w *sqliteWriter) run() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), insertTimeout)
 		defer cancel()
-		_, err := stmt.ExecContext(
+
+		result, err := stmt.ExecContext(
 			ctx,
 			r.RequestID,
 			r.Provider,
@@ -170,6 +171,13 @@ func (w *sqliteWriter) run() {
 		)
 		if err != nil {
 			recordPersistenceDrop(DropReasonInsertFailure, time.Now().UTC())
+			return
+		}
+
+		// Detect request_id conflict: SQLite ON CONFLICT DO NOTHING yields 0 affected rows.
+		rowsAffected, err := result.RowsAffected()
+		if err == nil && rowsAffected == 0 {
+			recordPersistenceDrop(DropReasonRequestIDConflict, time.Now().UTC())
 		}
 	}
 
