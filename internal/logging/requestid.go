@@ -14,11 +14,12 @@ type requestIDKey struct{}
 // ginRequestIDKey is the Gin context key for request IDs.
 const ginRequestIDKey = "__request_id__"
 
-// GenerateRequestID creates a new 8-character hex request ID.
+// GenerateRequestID creates a new 16-character hex request ID.
 func GenerateRequestID() string {
-	b := make([]byte, 4)
+	// 64-bit = 8 bytes -> 16 hex characters.
+	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		return "00000000"
+		return "0000000000000000"
 	}
 	return hex.EncodeToString(b)
 }
