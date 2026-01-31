@@ -263,7 +263,11 @@ Plans:
   2. stderr 实时输出/汇总与落库在真实环境权限/部署方式下验证可用
   3. 对“headers 已提交后发生 terminal error”等难以单测覆盖的边界做过实测并记录结论
 
-**Plans**: TBD (not planned yet)
+**Plans**: 2 plans in 2 waves
+
+Plans:
+- [ ] 11-01-PLAN.md — 搭建脚本化验证骨架（baseline + edge-case 工具/脚本 + 报告模板）
+- [ ] 11-02-PLAN.md — 执行 runtime validation 并产出可审计报告（含 human verify checkpoint）
 
 ## Progress
 
