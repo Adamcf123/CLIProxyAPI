@@ -185,6 +185,70 @@ func TestPersistenceHealth_InsertFailureIsObservable(t *testing.T) {
 	}
 }
 
+func TestWriter_DetectsRequestIDConflict(t *testing.T) {
+	snap := snapshotPersistenceHealth()
+	t.Cleanup(func() { restorePersistenceHealth(snap) })
+
+	resetPersistenceHealthForTest()
+
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	db, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	w := newSQLiteWriter(writerQueueSize)
+	if err := w.Start(db); err != nil {
+		t.Fatalf("writer.Start: %v", err)
+	}
+
+	record := MetricRecord{
+		RequestID: "0123456789abcdef",
+		Provider:  "test",
+		Model:     "model",
+	}
+
+	// First insert should succeed.
+	w.Enqueue(record)
+	waitForCount(t, db, 1)
+
+	h1 := GetPersistenceHealth(time.Now().UTC())
+	if h1.DroppedTotal != 0 {
+		t.Fatalf("DroppedTotal after first insert: got=%d want=0", h1.DroppedTotal)
+	}
+
+	// Second insert with the same request_id should be classified as a conflict drop.
+	w.Enqueue(record)
+
+	baseline := uint64(0)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h := GetPersistenceHealth(time.Now().UTC())
+		if h.DroppedTotal >= baseline+1 && h.LastDropReason != nil && *h.LastDropReason == DropReasonRequestIDConflict {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for conflict drop: DroppedTotal=%d LastDropReason=%v", h.DroppedTotal, h.LastDropReason)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Ensure the record exists exactly once (first insert succeeded, second was dropped).
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM metrics WHERE request_id = ?;", record.RequestID).Scan(&count); err != nil {
+		t.Fatalf("query count by request_id: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row for request_id=%q, got %d", record.RequestID, count)
+	}
+}
+
 func TestPersistenceHealth_QuietPeriodClearsDegraded(t *testing.T) {
 	snap := snapshotPersistenceHealth()
 	t.Cleanup(func() { restorePersistenceHealth(snap) })
