@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 8: Persistence Contract & Observability** - 明确 best-effort 持久化契约并补齐可观测性
 - [x] **Phase 9: Cancel/Disconnect Semantics** - 明确客户端取消/断连的失败语义并锁定测试
 - [x] **Phase 10: Request ID Robustness** - 强化 request_id 唯一性与冲突可见性，避免静默缺行
-- [ ] **Phase 11: Runtime Validation (Optional)** - 在真实流量下验证性能/输出/极端流式错误语义
+- [x] **Phase 11: Runtime Validation (Optional)** - 在真实流量下验证性能/输出/极端流式错误语义
 
 ## Phase Details
 
@@ -198,7 +198,7 @@ Plans:
   2. 关键丢弃路径可追踪（例如 queue-full / writer-not-started / insert failure）且不会弱化安全边界
   3. 关键行为有回归测试或契约测试锁定（至少覆盖可观测性信号）
 
-**Plans**: 2 plans in 2 waves
+**Plans**: 4 plans in 2 waves
 
 Plans:
 - [x] 08-01-PLAN.md — 在 writer drop/insert failure 路径记录 health，并仅在 degraded 时向 management meta 暴露
@@ -263,11 +263,13 @@ Plans:
   2. stderr 实时输出/汇总与落库在真实环境权限/部署方式下验证可用
   3. 对“headers 已提交后发生 terminal error”等难以单测覆盖的边界做过实测并记录结论
 
-**Plans**: 2 plans in 2 waves
+**Plans**: 4 plans in 2 waves
 
 Plans:
-- [ ] 11-01-PLAN.md — 搭建脚本化验证骨架（baseline + edge-case 工具/脚本 + 报告模板）
-- [ ] 11-02-PLAN.md — 执行 runtime validation 并产出可审计报告（含 human verify checkpoint）
+- [x] 11-01-PLAN.md — 搭建脚本化验证骨架（baseline + edge-case 工具/脚本 + 报告模板）
+- [x] 11-02-PLAN.md — 执行 runtime validation 并产出可审计报告（含 human verify checkpoint）
+- [x] 11-03-PLAN.md — Gap closure：服务端 error log/request dump 不落盘敏感认证头（Authorization / X-Management-Key）
+- [x] 11-04-PLAN.md — Gap closure：secrets guard 生效 + 清理泄露 artifacts + 报告补齐可审计证据
 
 ## Progress
 
@@ -286,4 +288,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Persistence Contract & Observability | 2/2 | Complete | 2026-01-30 |
 | 9. Cancel/Disconnect Semantics | 3/3 | Complete | 2026-02-01 |
 | 10. Request ID Robustness | 3/3 | Complete | 2026-02-01 |
-| 11. Runtime Validation (Optional) | 0/? | Planned (Optional) | |
+| 11. Runtime Validation (Optional) | 4/4 | Complete | 2026-02-01 |
