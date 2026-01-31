@@ -158,12 +158,13 @@ main() {
     --arg git_commit "$commit" \
     --arg config_src "$config_src" \
     --arg config_run "$config_run" \
+    --arg secrets_guard_scan "$run_dir/secrets_guard_scan.txt" \
     --arg port "$port" \
     --arg models "$models" \
     --arg concurrency "$concurrency" \
     --arg duration_sec "$duration_s" \
     --arg qps "$qps" \
-    '{started_at:$started_at, git_commit:$git_commit, config_src:$config_src, config_run:$config_run, port:($port|tonumber), models:($models|split(",")), concurrency:($concurrency|tonumber), duration_sec:($duration_sec|tonumber), qps:($qps|tonumber)}' \
+    '{started_at:$started_at, git_commit:$git_commit, config_src:$config_src, config_run:$config_run, secrets_guard_scan:$secrets_guard_scan, port:($port|tonumber), models:($models|split(",")), concurrency:($concurrency|tonumber), duration_sec:($duration_sec|tonumber), qps:($qps|tonumber)}' \
     >"$run_dir/run_meta.json"
 
   local timings
