@@ -5,24 +5,23 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Phase 10 complete, ready for Phase 11 (optional)
+**Current focus:** Phase 11 complete (runtime validation verified)
 
 ## Current Position
 
-Phase: 10 of 11 (Request ID Robustness)
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-02-01 — Completed 10-03-PLAN.md (conflict contract tests)
-Verification: 2026-02-01 — Phase 10 goal passed (.planning/phases/10-request-id-robustness/10-VERIFICATION.md)
+Phase: 11 of 11 (Runtime Validation)
+Plan: 4 of 4 in current phase
+Status: Phase complete (verified)
+Last activity: 2026-02-01 — Phase 11 goal passed (.planning/phases/11-runtime-validation/11-VERIFICATION.md)
 
-Progress: [██████████] 100% of planned plans to date (35/35)
+Progress: [██████████] 100% of planned plans to date (39/39)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 35
+- Total plans completed: 39
 - Average duration: 7 min
-- Total execution time: 2.1 hours
+- Total execution time: 2.3 hours
 
 **By Phase:**
 
@@ -99,21 +98,26 @@ Recent decisions affecting current work:
 - Canceled 的 ErrorInfo 必须为空，且不计入 TPS/TPOT 聚合
 - Query API percentiles 排除 canceled 样本，buckets 每 bucket 单列 canceled_count
 
+**From Phase 11-runtime-validation:**
+- stderr `metrics_summary.tracking_id` 与 SQLite `metrics.request_id` 对齐，保证运行时证据可对照
+- OpenAI-compat 流式在缺失 `[DONE]` 的 EOF 场景被视为 terminal error（可持久化失败语义）
+- Usage publish 在 handler tail 之后时，status_code 通过 Gin writer fallback 确保可落库
+- Disk request logs omit sensitive auth headers entirely (Authorization / Proxy-Authorization / X-Management-Key / Cookie)
+
 ### Pending Todos
 
 [From .planning/todos/pending/ — ideas captured during sessions]
 
-Count: 1
-- .planning/todos/pending/2026-01-30-support-streaming-usage-tokens-gpt-5-2.md
+Count: 0
 
 ### Blockers/Concerns
 
 [Issues that affect future work]
 
-None yet.
+- (Closed) Phase 11 secrets gap: secrets guard scans artifacts and no raw auth headers persist on disk (see `.planning/phases/11-runtime-validation/11-VERIFICATION.md`).
 
 ## Session Continuity
 
-Last session: 2026-01-31 18:03Z
-Stopped at: Completed 10-03-PLAN.md
+Last session: 2026-02-01 20:10Z
+Stopped at: Phase 11 verified (passed)
 Resume file: None
