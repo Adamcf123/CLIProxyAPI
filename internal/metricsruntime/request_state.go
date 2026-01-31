@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
 	"github.com/tidwall/gjson"
 )
@@ -277,7 +278,13 @@ func AttachRequestState(c *gin.Context, state *RequestState) {
 	if c == nil || state == nil {
 		return
 	}
-	if state.TrackingID == "" {
+	// Align stderr metrics_summary.tracking_id with SQLite metrics.request_id.
+	// The request_id is generated and stored in Gin context by middleware; persistence uses the
+	// same request_id from context. If we leave TrackingID as a random UUID, runtime evidence is
+	// not correlatable across stderr and SQLite.
+	if rid := logging.GetGinRequestID(c); rid != "" {
+		state.TrackingID = rid
+	} else if state.TrackingID == "" {
 		state.TrackingID = uuid.NewString()
 	}
 	if state.StartedAt.IsZero() {
