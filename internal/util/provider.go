@@ -215,6 +215,32 @@ func MaskSensitiveHeaderValue(key, value string) string {
 	}
 }
 
+// ShouldOmitHeaderFromLogs returns true when a request/response header MUST NOT be written to
+// disk logs under any circumstances.
+//
+// This is a centralized, case-insensitive policy (single source of truth) used by request loggers.
+// Keep this list conservative (fail-safe): if a header might carry credentials, omit it entirely.
+func ShouldOmitHeaderFromLogs(key string) bool {
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	if lowerKey == "" {
+		return false
+	}
+	lowerKey = strings.TrimSuffix(lowerKey, ":")
+
+	// Any authorization-related header can contain bearer/basic credentials.
+	if strings.Contains(lowerKey, "authorization") {
+		return true
+	}
+
+	// Cookie headers frequently carry session tokens.
+	switch lowerKey {
+	case "x-management-key", "cookie", "set-cookie":
+		return true
+	default:
+		return false
+	}
+}
+
 // MaskSensitiveQuery masks sensitive query parameters, e.g. auth_token, within the raw query string.
 func MaskSensitiveQuery(raw string) string {
 	if raw == "" {
