@@ -107,6 +107,15 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 				if snap.StatusCode != 0 {
 					code := int64(snap.StatusCode)
 					statusCodePtr = &code
+				} else {
+					// In the common path, handlers set RequestState.StatusCode near the tail of
+					// the request. Usage publish can run earlier (e.g. at stream end), so we
+					// also fall back to the Gin response writer's status when available.
+					sc := ginCtx.Writer.Status()
+					if sc != 0 {
+						code := int64(sc)
+						statusCodePtr = &code
+					}
 				}
 				if snap.LastError != "" {
 					v := snap.LastError
