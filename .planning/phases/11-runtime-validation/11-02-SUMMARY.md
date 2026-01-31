@@ -68,6 +68,10 @@ Each task was committed atomically:
 1. **Task 1: 运行 baseline（真实 providers，轻负载 steady-state）并采集证据** - `56f8078` (fix)
 2. **Task 2: 运行 required edge scenarios（每个 >=3 次）并记录结论** - `a0cc868` (fix)
 
+## Checkpoint Outcome
+
+- Human verification (report content + redaction): approved.
+
 ## Files Created/Modified
 
 - `.planning/phases/11-runtime-validation/11-RUNTIME-VALIDATION-REPORT.md` - Audit-ready report with commands, thresholds, conclusions, and evidence paths
@@ -143,7 +147,7 @@ None - this plan used local runtime and validation-only placeholders; no new ext
 
 ## Next Phase Readiness
 
-- Phase 11 is ready for final human verification (report content + secrets check) at the checkpoint.
+- None - checkpoint passed; Phase 11 is complete.
 
 ---
 *Phase: 11-runtime-validation*
