@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Guaranteed Usage Publish** - 无 usage 场景也能落库，保证历史可追溯
 - [x] **Phase 7: Docs & Traceability Cleanup** - 修复规划文档漂移（Requirements/Docs 与实现一致）
 - [x] **Phase 8: Persistence Contract & Observability** - 明确 best-effort 持久化契约并补齐可观测性
-- [ ] **Phase 9: Cancel/Disconnect Semantics** - 明确客户端取消/断连的失败语义并锁定测试
+- [x] **Phase 9: Cancel/Disconnect Semantics** - 明确客户端取消/断连的失败语义并锁定测试
 - [ ] **Phase 10: Request ID Robustness** - 强化 request_id 唯一性与冲突可见性，避免静默缺行
 - [ ] **Phase 11: Runtime Validation (Optional)** - 在真实流量下验证性能/输出/极端流式错误语义
 
@@ -244,7 +244,7 @@ Plans:
 **Plans**: 3 plans in 3 waves
 
 Plans:
-- [ ] 10-01-PLAN.md — 升级 request_id 生成器到 64-bit (16-char hex)
+- [x] 10-01-PLAN.md — 升级 request_id 生成器到 64-bit (16-char hex)
 - [ ] 10-02-PLAN.md — 在 writer 层检测 request_id 冲突并记录到 health
 - [ ] 10-03-PLAN.md — 测试锁定冲突检测与暴露链路
 
@@ -281,5 +281,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Docs & Traceability Cleanup | 4/4 | Complete | 2026-01-31 |
 | 8. Persistence Contract & Observability | 2/2 | Complete | 2026-01-30 |
 | 9. Cancel/Disconnect Semantics | 3/3 | Complete | 2026-02-01 |
-| 10. Request ID Robustness | 0/? | Planned | |
+| 10. Request ID Robustness | 1/3 | In progress | |
 | 11. Runtime Validation (Optional) | 0/? | Planned (Optional) | |
