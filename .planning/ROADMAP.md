@@ -245,7 +245,7 @@ Plans:
 
 Plans:
 - [x] 10-01-PLAN.md — 升级 request_id 生成器到 64-bit (16-char hex)
-- [ ] 10-02-PLAN.md — 在 writer 层检测 request_id 冲突并记录到 health
+- [x] 10-02-PLAN.md — 在 writer 层检测 request_id 冲突并记录到 health
 - [ ] 10-03-PLAN.md — 测试锁定冲突检测与暴露链路
 
 ### Phase 11: Runtime Validation (Optional)
@@ -281,5 +281,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Docs & Traceability Cleanup | 4/4 | Complete | 2026-01-31 |
 | 8. Persistence Contract & Observability | 2/2 | Complete | 2026-01-30 |
 | 9. Cancel/Disconnect Semantics | 3/3 | Complete | 2026-02-01 |
-| 10. Request ID Robustness | 1/3 | In progress | |
+| 10. Request ID Robustness | 2/3 | In progress | |
 | 11. Runtime Validation (Optional) | 0/? | Planned (Optional) | |
