@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricsruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -19,6 +22,21 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/sjson"
 )
+
+func maybeSetRequestStateLastError(ctx context.Context, err error) {
+	if err == nil || ctx == nil {
+		return
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return
+	}
+	state, ok := metricsruntime.GetRequestState(ginCtx)
+	if !ok || state == nil {
+		return
+	}
+	state.SetLastError(err)
+}
 
 // OpenAICompatExecutor implements a stateless executor for OpenAI-compatible providers.
 // It performs request/response translation and executes against the provider base URL
@@ -271,6 +289,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		}()
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(nil, 52_428_800) // 50MB
+		sawDone := false
 		var param any
 		for scanner.Scan() {
 			line := scanner.Bytes()
@@ -285,6 +304,14 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			if !bytes.HasPrefix(line, []byte("data:")) {
 				continue
 			}
+			// OpenAI-compatible SSE streams must emit a terminal [DONE] marker.
+			// If the upstream closes cleanly without [DONE] after having sent payload bytes,
+			// clients will see a successful 200 response unless we surface a terminal error.
+			trimmed := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+			if bytes.Equal(trimmed, []byte("[DONE]")) {
+				sawDone = true
+				continue
+			}
 
 			// OpenAI-compatible streams are SSE: lines typically prefixed with "data: ".
 			// Pass through translator; it yields one or more chunks for the target schema.
@@ -295,8 +322,19 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			recordAPIResponseError(ctx, e.cfg, errScan)
+			// If the client canceled, we want 499 + empty error_info (not a failure).
+			if !errors.Is(errScan, context.Canceled) {
+				maybeSetRequestStateLastError(ctx, errScan)
+			}
 			reporter.publishFailure(ctx)
 			out <- cliproxyexecutor.StreamChunk{Err: errScan}
+		} else if !sawDone && ctx.Err() == nil {
+			errEOF := io.ErrUnexpectedEOF
+			recordAPIResponseError(ctx, e.cfg, errEOF)
+			// Make persistence/audit semantics deterministic: set error_info BEFORE ensurePublished.
+			maybeSetRequestStateLastError(ctx, errEOF)
+			reporter.publishFailure(ctx)
+			out <- cliproxyexecutor.StreamChunk{Err: errEOF}
 		}
 		// Ensure we record the request if no usage chunk was ever seen
 		reporter.ensurePublished(ctx)
