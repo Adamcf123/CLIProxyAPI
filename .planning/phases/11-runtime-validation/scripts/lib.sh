@@ -186,9 +186,121 @@ stop_resource_sampler() {
 rg_secrets_guard() {
   local target
   target="$1"
-  # Guardrail: never persist raw auth headers; avoid false positives for placeholders like sk-dummy.
-  if rg -n "Authorization:|X-Management-Key:|sk-[A-Za-z0-9]{16,}" "$target" >/dev/null 2>&1; then
-    rg -n "Authorization:|X-Management-Key:|sk-[A-Za-z0-9]{16,}" "$target" >&2 || true
-    die "secret-like material detected under: ${target}"
+
+  if [[ -z "$target" ]]; then
+    die "rg_secrets_guard requires a target directory"
   fi
+  if [[ ! -d "$target" ]]; then
+    die "rg_secrets_guard target must be a directory: ${target}"
+  fi
+
+  # Auditable output: always write a scan report under the run_dir.
+  local out
+  out="$target/secrets_guard_scan.txt"
+
+  # Scan only text-like artifacts to avoid binary DB/WAL noise.
+  # Keep the list aligned with Phase 11 artifact types.
+  local include_globs
+  include_globs=(
+    "*.log"
+    "*.txt"
+    "*.tsv"
+    "*.json"
+    "*.md"
+    "*.out"
+    "*.sse"
+  )
+
+  # Guardrail: never persist raw auth headers; avoid false positives for placeholders like sk-dummy.
+  # - Header lines must be anchored to avoid matching docs/explanations.
+  # - API key pattern is length-based to avoid matching sk-dummy.
+  local pattern
+  pattern='(^Authorization:[[:space:]]|^X-Management-Key:[[:space:]]|sk-[A-Za-z0-9]{16,})'
+
+  {
+    echo "secrets_guard"
+    echo "started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    echo "target=${target}"
+    echo ""
+    echo "scan_mode="
+    echo "- rg --no-ignore (do not respect .gitignore/.ignore)"
+    echo "- include globs (text-like only):"
+    local g
+    for g in "${include_globs[@]}"; do
+      echo "  - ${g}"
+    done
+    echo "- exclude globs:"
+    echo "  - secrets_guard_scan.txt"
+    echo "  - logs/metrics.db*"
+    echo "- patterns:"
+    echo "  - ^Authorization:"
+    echo "  - ^X-Management-Key:"
+    echo "  - sk-[A-Za-z0-9]{16,}"
+    echo ""
+    echo "command="
+    echo "rg --no-ignore --hidden --json --line-number --with-filename --color never [globs...] '${pattern}' '${target}'"
+    echo ""
+  } >"$out"
+
+  local rg_args
+  rg_args=(
+    --no-ignore
+    --hidden
+    --json
+    --line-number
+    --with-filename
+    --color
+    never
+    --glob
+    '!secrets_guard_scan.txt'
+    --glob
+    '!logs/metrics.db*'
+  )
+  local inc
+  for inc in "${include_globs[@]}"; do
+    rg_args+=(--glob "$inc")
+  done
+
+  set +e
+  local rg_out
+  rg_out="$(rg "${rg_args[@]}" "$pattern" "$target" 2>>"$out")"
+  local rg_rc=$?
+  set -e
+
+  if [[ $rg_rc -eq 2 ]]; then
+    {
+      echo "result=ERROR"
+      echo "error=rg exited with status 2 (see stderr above)"
+    } >>"$out"
+    die "secrets guard scan failed (rg error); see: ${out}"
+  fi
+
+  if [[ $rg_rc -eq 0 ]]; then
+    # Matches found. For safety, persist ONLY locations (path:line) instead of raw matching lines.
+    local locations
+    locations="$(printf '%s\n' "$rg_out" \
+      | jq -r -s 'map(select(.type=="match") | (.data.path.text + ":" + (.data.line_number|tostring))) | unique | .[]' \
+      2>/dev/null || true)"
+
+    {
+      echo "result=FAIL"
+      echo "match_locations="
+      if [[ -n "$locations" ]]; then
+        printf '%s\n' "$locations"
+      else
+        echo "(unable to parse rg --json output; see raw output above)"
+      fi
+    } >>"$out"
+
+    if [[ -n "$locations" ]]; then
+      printf '%s\n' "$locations" >&2
+    fi
+    die "secret-like material detected under: ${target} (see ${out})"
+  fi
+
+  {
+    echo "result=PASS"
+    echo "note=No secret-like patterns detected in included artifact globs"
+  } >>"$out"
+  note "secrets_guard_scan=${out}"
 }

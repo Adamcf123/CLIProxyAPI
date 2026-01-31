@@ -5,6 +5,8 @@ IMPORTANT SECURITY NOTE:
 - DO NOT include API keys, tokens, or raw auth headers in this report.
 - DO NOT paste `Authorization:` or `X-Management-Key:` header lines.
 - Link to evidence files under `.planning/phases/11-runtime-validation/artifacts/` instead.
+- Server-side error request logging no longer persists `Authorization` / `X-Management-Key` headers to disk (dropped, not masked).
+- A secrets guard scan runs with `rg --no-ignore` over text-only globs (`*.log`, `*.txt`, `*.tsv`, `*.json`, `*.md`, `*.out`, `*.sse`) and excludes `logs/metrics.db*`; patterns include `^Authorization:`, `^X-Management-Key:`, and `sk-[A-Za-z0-9]{16,}`.
 
 ---
 
@@ -59,6 +61,11 @@ bash .planning/phases/11-runtime-validation/scripts/run_edge_cases.sh all
 ## Evidence Index
 
 This report is audit-oriented: it links evidence files instead of pasting logs.
+
+### Secrets Guard (Audit Proof)
+
+- **run_dir (re-verified):** `.planning/phases/11-runtime-validation/artifacts/run-20260131-200845-edge/`
+- `secrets_guard_scan.txt` (PASS): `.planning/phases/11-runtime-validation/artifacts/run-20260131-200845-edge/secrets_guard_scan.txt`
 
 ### Baseline Run Evidence
 
