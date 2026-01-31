@@ -577,6 +577,9 @@ func writeRequestInfoWithBody(
 		return errWrite
 	}
 	for key, values := range headers {
+		if util.ShouldOmitHeaderFromLogs(key) {
+			continue
+		}
 		for _, value := range values {
 			masked := util.MaskSensitiveHeaderValue(key, value)
 			if _, errWrite := io.WriteString(w, fmt.Sprintf("%s: %s\n", key, masked)); errWrite != nil {
@@ -945,6 +948,9 @@ func (l *FileRequestLogger) formatRequestInfo(url, method string, headers map[st
 
 	content.WriteString("=== HEADERS ===\n")
 	for key, values := range headers {
+		if util.ShouldOmitHeaderFromLogs(key) {
+			continue
+		}
 		for _, value := range values {
 			masked := util.MaskSensitiveHeaderValue(key, value)
 			content.WriteString(fmt.Sprintf("%s: %s\n", key, masked))

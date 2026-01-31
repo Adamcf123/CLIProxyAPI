@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Phase 11 gaps found (runtime validation secrets guard)
+**Current focus:** Phase 11 gap closure (request log secrets never written to disk)
 
 ## Current Position
 
 Phase: 11 of 11 (Runtime Validation)
-Plan: 2 of 2 in current phase
-Status: Verification gaps_found
-Last activity: 2026-02-01 — Verification found gaps in Phase 11 (11-VERIFICATION.md)
+Plan: 3 of 4 in current phase
+Status: In progress
+Last activity: 2026-02-01 — Completed Phase 11 Plan 03 (11-03-PLAN.md)
 
-Progress: [██████████] 100% of planned plans executed (37/37)
+Progress: [█████████░] 97% of planned plans executed (38/39)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 36
+- Total plans completed: 38
 - Average duration: 7 min
-- Total execution time: 2.2 hours
+- Total execution time: 2.3 hours
 
 **By Phase:**
 
@@ -102,6 +102,7 @@ Recent decisions affecting current work:
 - stderr `metrics_summary.tracking_id` 与 SQLite `metrics.request_id` 对齐，保证运行时证据可对照
 - OpenAI-compat 流式在缺失 `[DONE]` 的 EOF 场景被视为 terminal error（可持久化失败语义）
 - Usage publish 在 handler tail 之后时，status_code 通过 Gin writer fallback 确保可落库
+- Disk request logs omit sensitive auth headers entirely (Authorization / Proxy-Authorization / X-Management-Key / Cookie)
 
 ### Pending Todos
 
@@ -114,10 +115,10 @@ Count: 1
 
 [Issues that affect future work]
 
-- Phase 11 verification gaps: artifacts evidence contains raw `Authorization:` header line; secrets guard currently skips gitignored artifacts (see `.planning/phases/11-runtime-validation/11-VERIFICATION.md`)
+- Phase 11 secrets gap (Authorization header persisted in error request logs) is addressed in 11-03; re-run an edge-case once to regenerate evidence and confirm no sensitive header lines appear.
 
 ## Session Continuity
 
-Last session: 2026-01-31 19:26Z
-Stopped at: Phase 11 verification (gaps_found)
+Last session: 2026-02-01 20:00Z
+Stopped at: Completed 11-03-PLAN.md
 Resume file: None
