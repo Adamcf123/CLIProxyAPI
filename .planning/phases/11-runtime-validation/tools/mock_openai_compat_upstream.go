@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,13 +9,15 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type chatCompletionRequest struct {
-	Model    string          `json:"model"`
-	Messages json.RawMessage `json:"messages"`
-	Stream   bool            `json:"stream"`
+	Model     string          `json:"model"`
+	Messages  json.RawMessage `json:"messages"`
+	Stream    bool            `json:"stream"`
+	MaxTokens *int            `json:"max_tokens,omitempty"`
 }
 
 func main() {
@@ -51,7 +54,6 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	var req chatCompletionRequest
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		// Keep this forgiving: upstream mocks should be easy to use.
 		http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
@@ -63,7 +65,15 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		writeAndDisconnectStream(w, req.Model)
+		// Behaviors are keyed off the prompt so each edge scenario can be deterministic.
+		// - terminal error after headers committed: upstream disconnects after a couple SSE events
+		// - client cancel: upstream keeps streaming until the client disconnects
+		msg := strings.ToLower(string(bytes.TrimSpace(req.Messages)))
+		if strings.Contains(msg, "disconnect") {
+			writeAndDisconnectStream(w, req.Model)
+			return
+		}
+		writeStreamingUntilClientGone(w, req.Model)
 		return
 	}
 
@@ -114,7 +124,7 @@ func writeAndDisconnectStream(w http.ResponseWriter, model string) {
 			},
 		},
 	}
-	writeSSE(w, event1)
+	_ = writeSSE(w, event1)
 	fl.Flush()
 
 	time.Sleep(50 * time.Millisecond)
@@ -131,7 +141,7 @@ func writeAndDisconnectStream(w http.ResponseWriter, model string) {
 			},
 		},
 	}
-	writeSSE(w, event2)
+	_ = writeSSE(w, event2)
 	fl.Flush()
 
 	hj, ok := w.(http.Hijacker)
@@ -146,14 +156,57 @@ func writeAndDisconnectStream(w http.ResponseWriter, model string) {
 	_ = conn.Close()
 }
 
-func writeSSE(w http.ResponseWriter, obj any) {
-	b, err := json.Marshal(obj)
-	if err != nil {
+func writeStreamingUntilClientGone(w http.ResponseWriter, model string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	fl, ok := w.(http.Flusher)
+	if !ok {
 		return
 	}
-	_, _ = w.Write([]byte("data: "))
-	_, _ = w.Write(b)
-	_, _ = w.Write([]byte("\n\n"))
+
+	for i := 0; i < 200; i++ {
+		event := map[string]any{
+			"id":      "mockcmpl-keepalive",
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   model,
+			"choices": []any{
+				map[string]any{
+					"index": 0,
+					"delta": map[string]any{"content": "tick "},
+				},
+			},
+		}
+		if err := writeSSE(w, event); err != nil {
+			return
+		}
+		fl.Flush()
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Graceful close if the client never canceled.
+	_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	fl.Flush()
+}
+
+func writeSSE(w http.ResponseWriter, obj any) error {
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte("data: ")); err != nil {
+		return err
+	}
+	if _, err := w.Write(b); err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte("\n\n")); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Ensure net is referenced for go vet paranoia in some environments.

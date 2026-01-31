@@ -61,6 +61,10 @@ write_temp_config() {
 host: "127.0.0.1"
 port: ${port}
 
+# Ensure the proxy can always create its auth directory when running from an isolated run_dir.
+# The server process CWD is the run_dir, so a relative path keeps all artifacts self-contained.
+auth-dir: "./auth"
+
 remote-management:
   allow-remote: false
   secret-key: "${management_key}"
@@ -230,11 +234,12 @@ scenario_no_usage() {
 
   local i
   for ((i=1; i<=REPEATS; i++)); do
-    curl -sS -o /dev/null \
+    # Use streaming mode so stderr emits a metrics_summary line we can correlate.
+    curl -sS -N -o "$RUN_DIR/no_usage_${i}.sse" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer ${API_KEY}" \
       -X POST "$base_url/v1/chat/completions" \
-      --data-binary '{"model":"mock-stream","stream":false,"max_tokens":8,"messages":[{"role":"user","content":"no usage please"}]}'
+      --data-binary '{"model":"mock-stream","stream":true,"max_tokens":8,"messages":[{"role":"user","content":"no usage please"}]}'
 
     local request_id row usage_note observed
     request_id="$(extract_last_request_id "$stderr")"
@@ -267,26 +272,36 @@ scenario_persistence_degraded() {
   exec 9>"$fifo"
   printf 'BEGIN EXCLUSIVE;\n' >&9
 
+  # Flood the request path while holding the DB lock. This is intended to
+  # deterministically trigger best-effort drops (queue_full and/or insert_failure)
+  # and therefore surface meta.persistence.degraded=true.
+  local burst
+  burst=1100
   local i
   for ((i=1; i<=REPEATS; i++)); do
-    # This request should complete, but persistence is expected to degrade and drop inserts.
-    curl -sS -o /dev/null \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer ${API_KEY}" \
-      -X POST "$base_url/v1/chat/completions" \
-      --data-binary '{"model":"mock-stream","stream":false,"max_tokens":8,"messages":[{"role":"user","content":"trigger persistence degraded"}]}' || true
+    seq 1 "$burst" \
+      | xargs -P 24 -I{} \
+        curl -sS -o /dev/null \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${API_KEY}" \
+          -X POST "$base_url/v1/chat/completions" \
+          --data-binary '{"model":"mock-stream","stream":false,"max_tokens":1,"messages":[{"role":"user","content":"trigger persistence degraded"}]}' \
+        || true
+
+    # Query management endpoint for degraded meta.
+    local meta_file
+    meta_file="$RUN_DIR/management_metrics_persistence_degraded_${i}.json"
+    curl -sS \
+      -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+      "$base_url/v0/management/metrics?mode=percentiles" \
+      >"$meta_file" || true
+
+    local degraded reason dropped_total
+    degraded="$(jq -r '.meta.persistence.degraded // false' "$meta_file" 2>/dev/null || echo false)"
+    reason="$(jq -r '.meta.persistence.last_drop_reason // ""' "$meta_file" 2>/dev/null || echo "")"
+    dropped_total="$(jq -r '.meta.persistence.dropped_total // 0' "$meta_file" 2>/dev/null || echo 0)"
+    append_evidence "$evidence" "persistence-degraded" "$i" "--" "meta.persistence.degraded=true" "degraded=${degraded} dropped_total=${dropped_total} reason=${reason}" "$meta_file"
   done
-
-  # Query management endpoint for degraded meta.
-  curl -sS \
-    -H "X-Management-Key: ${MANAGEMENT_KEY}" \
-    "$base_url/v0/management/metrics?mode=percentiles" \
-    >"$RUN_DIR/management_metrics_persistence_degraded.json" || true
-
-  local degraded reason
-  degraded="$(jq -r '.meta.persistence.degraded // false' "$RUN_DIR/management_metrics_persistence_degraded.json" 2>/dev/null || echo false)"
-  reason="$(jq -r '.meta.persistence.last_drop_reason // ""' "$RUN_DIR/management_metrics_persistence_degraded.json" 2>/dev/null || echo "")"
-  append_evidence "$evidence" "persistence-degraded" "$REPEATS" "--" "meta.persistence.degraded=true" "degraded=${degraded} reason=${reason}" "$RUN_DIR/management_metrics_persistence_degraded.json"
 
   # Release lock.
   printf 'COMMIT;\n' >&9
