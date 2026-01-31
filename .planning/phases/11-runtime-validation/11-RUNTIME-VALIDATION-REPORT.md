@@ -78,7 +78,15 @@ This report is audit-oriented: it links evidence files instead of pasting logs.
 
 ### Edge Case Run Evidence
 
-TBD (filled in Task 2).
+- **run_dir:** `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/`
+- `server.stdout.log`: `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/server.stdout.log`
+- `server.stderr.log` (metrics_summary lines): `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/server.stderr.log`
+- `edge_evidence.tsv` (authoritative per-scenario table): `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/edge_evidence.tsv`
+- `logs/metrics.db`: `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/logs/metrics.db`
+- `management_metrics_persistence_degraded_*.json`:
+  - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/management_metrics_persistence_degraded_1.json`
+  - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/management_metrics_persistence_degraded_2.json`
+  - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/management_metrics_persistence_degraded_3.json`
 
 ## Pass/Fail Thresholds
 
@@ -121,11 +129,71 @@ Edge scenarios should PASS if:
 
 ### Edge Scenarios
 
-TBD (filled in Task 2).
+All required edge scenarios were executed >= 3 times.
+
+Primary per-run evidence table:
+
+- `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/edge_evidence.tsv`
+
+#### 1) terminal error after headers committed
+
+- **Pass/Fail:** PASS
+- **Expected:** client receives partial SSE; stream ends without `[DONE]`; server records failure semantics (non-2xx and/or non-empty `error_info`).
+- **Observed:** 3/3 runs recorded `status=500` with non-empty `error_info`.
+- **Evidence:**
+  - Per-run SQLite row extracts:
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_terminal_error_1.tsv`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_terminal_error_2.tsv`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_terminal_error_3.tsv`
+  - Client SSE captures:
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/terminal_error_1.sse`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/terminal_error_2.sse`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/terminal_error_3.sse`
+
+#### 2) client cancel/disconnect (HTTP 499)
+
+- **Pass/Fail:** PASS
+- **Expected:** SQLite row exists with `status_code=499` and empty/NULL `error_info`.
+- **Observed:** 3/3 runs recorded `status=499` with empty `error_info`.
+- **Evidence:**
+  - Per-run SQLite row extracts:
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_client_cancel_1.tsv`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_client_cancel_2.tsv`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_client_cancel_3.tsv`
+  - Client-side cancel logs:
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/client_cancel_1.out`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/client_cancel_2.out`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/client_cancel_3.out`
+
+#### 3) upstream no-usage path (ensurePublished still yields a DB row)
+
+- **Pass/Fail:** PASS
+- **Expected:** SQLite row exists even when tokens are NULL; `metrics_summary.usage_note` indicates usage missing.
+- **Observed:** 3/3 runs have a queryable row; each run's `usage_note=usage_missing_tokens_unavailable`.
+- **Evidence:**
+  - Per-run SQLite row extracts:
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_no_usage_1.tsv`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_no_usage_2.tsv`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/sqlite_check_no_usage_3.tsv`
+  - Per-run client SSE captures:
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/no_usage_1.sse`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/no_usage_2.sse`
+    - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/no_usage_3.sse`
+
+#### 4) persistence degraded (queue_full / insert_failure) + observability
+
+- **Pass/Fail:** PASS
+- **Expected:** management response includes `meta.persistence.degraded=true` and exposes drop reason + dropped_total.
+- **Observed:** 3/3 polls show `degraded=true` with increasing `dropped_total`, and `last_drop_reason` includes `queue_full` and `insert_failure`.
+- **Evidence:**
+  - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/management_metrics_persistence_degraded_1.json`
+  - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/management_metrics_persistence_degraded_2.json`
+  - `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/management_metrics_persistence_degraded_3.json`
+  - Summary table: `.planning/phases/11-runtime-validation/artifacts/run-20260131-192103-edge/edge_evidence.tsv`
 
 ## Conclusion
 
-- **Overall:** PASS (baseline only)
-- **Confidence:** Moderate for baseline stability under the tested runtime profile.
+- **Overall:** PASS
+- **Confidence:** Moderate-to-high for release readiness on the tested runtime profile.
 - **Follow-ups:**
-  - Execute required edge scenarios (Task 2) and then finalize overall PASS/FAIL.
+  - (Optional) Run a slightly longer baseline (e.g. 2-5 minutes) to confirm stability over time; keep QPS guardrails.
