@@ -11,9 +11,10 @@ import (
 type DropReason string
 
 const (
-	DropReasonQueueFull        DropReason = "queue_full"
-	DropReasonWriterNotStarted DropReason = "writer_not_started"
-	DropReasonInsertFailure    DropReason = "insert_failure"
+	DropReasonQueueFull         DropReason = "queue_full"
+	DropReasonWriterNotStarted  DropReason = "writer_not_started"
+	DropReasonInsertFailure     DropReason = "insert_failure"
+	DropReasonRequestIDConflict DropReason = "request_id_conflict"
 )
 
 // PersistenceHealth is a process-lifetime view of best-effort persistence.
@@ -37,9 +38,10 @@ type dropReasonCode uint32
 const (
 	dropReasonNone dropReasonCode = 0
 
-	dropReasonQueueFull        dropReasonCode = 1
-	dropReasonWriterNotStarted dropReasonCode = 2
-	dropReasonInsertFailure    dropReasonCode = 3
+	dropReasonQueueFull         dropReasonCode = 1
+	dropReasonWriterNotStarted  dropReasonCode = 2
+	dropReasonInsertFailure     dropReasonCode = 3
+	dropReasonRequestIDConflict dropReasonCode = 4
 )
 
 type persistenceHealthTracker struct {
@@ -58,6 +60,8 @@ func dropReasonToCode(r DropReason) dropReasonCode {
 		return dropReasonWriterNotStarted
 	case DropReasonInsertFailure:
 		return dropReasonInsertFailure
+	case DropReasonRequestIDConflict:
+		return dropReasonRequestIDConflict
 	default:
 		return dropReasonNone
 	}
@@ -71,6 +75,8 @@ func codeToDropReason(c dropReasonCode) (DropReason, bool) {
 		return DropReasonWriterNotStarted, true
 	case dropReasonInsertFailure:
 		return DropReasonInsertFailure, true
+	case dropReasonRequestIDConflict:
+		return DropReasonRequestIDConflict, true
 	default:
 		return "", false
 	}
