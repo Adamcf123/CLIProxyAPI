@@ -197,3 +197,7 @@ Primary per-run evidence table:
 - **Confidence:** Moderate-to-high for release readiness on the tested runtime profile.
 - **Follow-ups:**
   - (Optional) Run a slightly longer baseline (e.g. 2-5 minutes) to confirm stability over time; keep QPS guardrails.
+
+## Human Verification
+
+- Report content and redaction: approved.
