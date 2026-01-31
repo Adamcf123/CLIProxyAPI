@@ -241,7 +241,12 @@ Plans:
   2. 冲突不会悄悄变成“查不到行”的用户体验（可观测/可诊断/可解释）
   3. 新增测试或属性验证覆盖至少一种冲突/重复路径
 
-**Plans**: TBD (not planned yet)
+**Plans**: 3 plans in 3 waves
+
+Plans:
+- [ ] 10-01-PLAN.md — 升级 request_id 生成器到 64-bit (16-char hex)
+- [ ] 10-02-PLAN.md — 在 writer 层检测 request_id 冲突并记录到 health
+- [ ] 10-03-PLAN.md — 测试锁定冲突检测与暴露链路
 
 ### Phase 11: Runtime Validation (Optional)
 
