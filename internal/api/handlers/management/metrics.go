@@ -308,6 +308,8 @@ func (h *Handler) attachPersistenceMeta(meta *metricsMeta) {
 	if h == nil || meta == nil {
 		return
 	}
+	// Persistence meta is a thin projection of the persistence health source.
+	// New stable DropReason values (e.g. request_id_conflict) automatically flow through.
 	fn := h.persistenceHealth
 	if fn == nil {
 		return
