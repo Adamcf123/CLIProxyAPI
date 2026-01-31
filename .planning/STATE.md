@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Phase 11 in progress (runtime validation harness)
+**Current focus:** Phase 11 gaps found (runtime validation secrets guard)
 
 ## Current Position
 
 Phase: 11 of 11 (Runtime Validation)
 Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-01 — Completed 11-02-PLAN.md (runtime validation execution + audit report)
+Status: Verification gaps_found
+Last activity: 2026-02-01 — Verification found gaps in Phase 11 (11-VERIFICATION.md)
 
-Progress: [██████████] 100% of planned plans to date (37/37)
+Progress: [██████████] 100% of planned plans executed (37/37)
 
 ## Performance Metrics
 
@@ -114,10 +114,10 @@ Count: 1
 
 [Issues that affect future work]
 
-None yet.
+- Phase 11 verification gaps: artifacts evidence contains raw `Authorization:` header line; secrets guard currently skips gitignored artifacts (see `.planning/phases/11-runtime-validation/11-VERIFICATION.md`)
 
 ## Session Continuity
 
 Last session: 2026-01-31 19:26Z
-Stopped at: Completed 11-02-PLAN.md
+Stopped at: Phase 11 verification (gaps_found)
 Resume file: None
