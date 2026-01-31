@@ -1,0 +1,10 @@
+# Runtime-validation artifacts (must never be committed)
+artifacts/
+
+# Defensive ignores (in case artifacts leak elsewhere under this phase dir)
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.pid
+*.tmp
