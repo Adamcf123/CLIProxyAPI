@@ -123,6 +123,10 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
 
+	// Provider compatibility normalization: kimi-for-coding rejects Claude "thinking" when
+	// assistant tool_use messages lack reasoning_content.
+	body = normalizeClaudeUpstreamPayload(baseModel, body)
+
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
 		body = ensureCacheControl(body)
@@ -262,6 +266,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
+
+	// Provider compatibility normalization: kimi-for-coding rejects Claude "thinking" when
+	// assistant tool_use messages lack reasoning_content.
+	body = normalizeClaudeUpstreamPayload(baseModel, body)
 
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
@@ -555,6 +563,13 @@ func disableThinkingIfToolChoiceForced(body []byte) []byte {
 		body, _ = sjson.DeleteBytes(body, "thinking")
 	}
 	return body
+}
+
+func normalizeClaudeUpstreamPayload(baseModel string, body []byte) []byte {
+	if baseModel != "kimi-for-coding" {
+		return body
+	}
+	return thinking.StripThinkingConfig(body, "claude")
 }
 
 type compositeReadCloser struct {
