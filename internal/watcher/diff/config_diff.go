@@ -69,6 +69,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.NonStreamKeepAliveInterval != newCfg.NonStreamKeepAliveInterval {
 		changes = append(changes, fmt.Sprintf("nonstream-keepalive-interval: %d -> %d", oldCfg.NonStreamKeepAliveInterval, newCfg.NonStreamKeepAliveInterval))
 	}
+	if oldCfg.MetricsProgressDisabled != newCfg.MetricsProgressDisabled {
+		changes = append(changes, fmt.Sprintf("metrics-progress-disabled: %t -> %t", oldCfg.MetricsProgressDisabled, newCfg.MetricsProgressDisabled))
+	}
 
 	// Quota-exceeded behavior
 	if oldCfg.QuotaExceeded.SwitchProject != newCfg.QuotaExceeded.SwitchProject {
