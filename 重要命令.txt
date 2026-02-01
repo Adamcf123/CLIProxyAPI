@@ -81,9 +81,6 @@ curl -sS \
 
 
 # Phase 02 指标输出（仅当 stderr 为 TTY 时显示流式进度行；非 TTY 仅在结束时输出单行 metrics_summary JSON）
-# 可通过环境变量强制禁用实时 progress 覆盖行（即使 stderr 为 TTY）：CLIPROXY_METRICS_PROGRESS_DISABLED=1
-# 示例：CLIPROXY_METRICS_PROGRESS_DISABLED=1 ./cli-proxy-api
-# 注意：该 env 只影响实时 progress，不影响请求结束的单行 metrics_summary JSON
 # Phase 03 持久化：写入 logs/metrics.db（SQLite）
 sqlite3 "logs/metrics.db" "SELECT request_id, provider, model, tps, ttft, tpot, created_at FROM metrics ORDER BY created_at DESC LIMIT 5;"
 
