@@ -223,6 +223,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		return nil, err
 	}
 
+	// Request usage information in stream for accurate TPS/TPOT metrics
+	translated, _ = sjson.SetBytes(translated, "stream_options.include_usage", true)
+
 	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
