@@ -34,6 +34,7 @@ type ResponseWriterWrapper struct {
 	gin.ResponseWriter
 	body                *bytes.Buffer              // body is a buffer to store the response body for non-streaming responses.
 	isStreaming         bool                       // isStreaming indicates whether the response is a streaming type (e.g., text/event-stream).
+	ginCtx              *gin.Context               // ginCtx enables streaming token timing capture.
 	streamWriter        logging.StreamingLogWriter // streamWriter is a writer for handling streaming log entries.
 	chunkChannel        chan []byte                // chunkChannel is a channel for asynchronously passing response chunks to the logger.
 	streamDone          chan struct{}              // streamDone signals when the streaming goroutine completes.
@@ -80,6 +81,10 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 	// CRITICAL: Write to client first (zero latency)
 	n, err := w.ResponseWriter.Write(data)
 	w.noteWriteError(err)
+
+	// Best-effort: for streaming responses, record first content token timing/chunk count.
+	// This is gated to only do work for the first few chunks to avoid per-chunk overhead.
+	w.maybeRecordStreamingContentToken(data)
 
 	// THEN: Handle logging based on response type
 	if w.isStreaming && w.chunkChannel != nil {
@@ -130,6 +135,11 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 	n, err := w.ResponseWriter.WriteString(data)
 	w.noteWriteError(err)
 
+	// See Write(): capture streaming token timing/chunk count.
+	if w.isStreaming {
+		w.maybeRecordStreamingContentToken([]byte(data))
+	}
+
 	// THEN: Capture for logging
 	if w.isStreaming && w.chunkChannel != nil {
 		// Capture TTFB on first chunk (synchronous, before async channel send)
@@ -162,8 +172,15 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	contentType := w.ResponseWriter.Header().Get("Content-Type")
 	w.isStreaming = w.detectStreaming(contentType)
 
+	// Best-effort: make status code visible to metricsruntime earlier than Finalize().
+	if w.ginCtx != nil {
+		if state, ok := metricsruntime.GetRequestState(w.ginCtx); ok && state != nil {
+			state.SetStatusCode(statusCode)
+		}
+	}
+
 	// If streaming, initialize streaming log writer
-	if w.isStreaming && w.logger.IsEnabled() {
+	if w.isStreaming && w.logger != nil && w.logger.IsEnabled() {
 		streamWriter, err := w.logger.LogStreamingRequest(
 			w.requestInfo.URL,
 			w.requestInfo.Method,
@@ -187,6 +204,43 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 
 	// Call original WriteHeader
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *ResponseWriterWrapper) maybeRecordStreamingContentToken(chunk []byte) {
+	if w == nil {
+		return
+	}
+	if !w.isStreaming {
+		return
+	}
+	if w.ginCtx == nil {
+		return
+	}
+	if len(chunk) == 0 {
+		return
+	}
+
+	state, ok := metricsruntime.GetRequestState(w.ginCtx)
+	if !ok || state == nil {
+		return
+	}
+
+	// Gate heavy parsing: once we have first token time and at least 2 content chunks,
+	// we have enough evidence for downstream rate computation.
+	snap := state.Snapshot()
+	if snap.FirstContentTokenAt != nil && snap.ContentTokenChunks >= 2 {
+		return
+	}
+
+	// Ensure StatusCode is not left at 0 for streaming paths where usage publish can
+	// occur before Finalize(). We prefer the underlying writer status; fall back to 200.
+	status := w.ResponseWriter.Status()
+	if status == 0 {
+		status = http.StatusOK
+	}
+	state.SetStatusCode(status)
+
+	metricsruntime.MaybeRecordFirstContentToken(w.ginCtx, chunk, time.Now().UTC())
 }
 
 // ensureHeadersCaptured is a helper function to make sure response headers are captured.
