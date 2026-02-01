@@ -69,6 +69,9 @@ func PrintProgress(state *RequestState, isTTY bool) {
 	if state == nil {
 		return
 	}
+	if !isTTY {
+		return
+	}
 	snap := state.Snapshot()
 
 	trackingShort := shortTrackingID(snap.TrackingID)
@@ -105,11 +108,7 @@ func PrintProgress(state *RequestState, isTTY bool) {
 		model,
 	)
 
-	if isTTY {
-		_, _ = fmt.Fprintf(os.Stderr, "\r\033[2K%s", line)
-		return
-	}
-	_, _ = fmt.Fprintln(os.Stderr, line)
+	_, _ = fmt.Fprintf(os.Stderr, "\r\033[2K%s", line)
 }
 
 type summaryLine struct {
