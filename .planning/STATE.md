@@ -108,8 +108,7 @@ Recent decisions affecting current work:
 
 [From .planning/todos/pending/ — ideas captured during sessions]
 
-Count: 1
-- .planning/todos/pending/2026-01-30-support-streaming-usage-tokens-gpt-5-2.md
+Count: 0
 
 ### Blockers/Concerns
 
