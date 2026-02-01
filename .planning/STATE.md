@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2025-01-29)
 
 **Core value:** 实时可见的 API 响应性能 — 用户能够获得 TPS 指标汇总并查询历史性能数据
-**Current focus:** Streaming metrics evidence usable (reduce TTFT/TPS/TPOT nulls for Responses + kimi-for-coding tool streaming)
+**Current focus:** Phase 11 complete (runtime validation verified)
 
 ## Current Position
 
 Phase: 11 of 11 (Runtime Validation)
 Plan: 4 of 4 in current phase
 Status: Phase complete (verified)
-Last activity: 2026-02-02 - Completed quick task 005: streaming metrics content detection fixes (Responses + kimi-for-coding)
+Last activity: 2026-02-01 - Completed quick task 004: kimi-for-coding backfill reasoning_content for tool calls
 
 Progress: [██████████] 100% of planned plans to date (39/39)
 
@@ -121,11 +121,11 @@ Count: 0
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 001 | Remove live metrics printing | 2026-02-01 | 44d4d24 | [001-remove-live-metrics-printing](./quick/001-remove-live-metrics-printing/) |
+| 003 | Disable metrics progress output via env | 2026-02-01 | 8ebd940 | [003-disable-metrics-progress-output-via-env-](./quick/003-disable-metrics-progress-output-via-env-/) |
 | 004 | kimi-for-coding: backfill reasoning_content for tool calls | 2026-02-01 | 3af2a38 | [004-kimi-for-coding-reasoning-content](./quick/004-kimi-for-coding-reasoning-content/) |
-| 005 | streaming metrics: content detection for Responses + kimi-for-coding tool streaming | 2026-02-02 | 233f709 | [005-metrics-streaming-content-detection](./quick/005-metrics-streaming-content-detection/) |
 
 ## Session Continuity
 
-Last session: 2026-02-02 05:53Z
-Stopped at: Quick task 005 complete (.planning/quick/005-metrics-streaming-content-detection/005-SUMMARY.md)
+Last session: 2026-02-01 13:41Z
+Stopped at: Quick task 004 complete (.planning/quick/004-kimi-for-coding-reasoning-content/004-SUMMARY.md)
 Resume file: None
