@@ -119,10 +119,14 @@ type bucketsResponse struct {
 			Count         int    `json:"count"`
 			CanceledCount int    `json:"canceled_count"`
 			Metrics       struct {
-				TPSAvg        *float64 `json:"tps_avg"`
-				TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
-				TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
-				DurationMSAvg *int64   `json:"duration_ms_avg"`
+				TPSAvg                *float64 `json:"tps_avg"`
+				TPSSampleCount        int      `json:"tps_sample_count"`
+				TTFTMillisAvg         *int64   `json:"ttft_ms_avg"`
+				TTFTMillisSampleCount int      `json:"ttft_ms_sample_count"`
+				TPOTMillisAvg         *int64   `json:"tpot_ms_avg"`
+				TPOTMillisSampleCount int      `json:"tpot_ms_sample_count"`
+				DurationMSAvg         *int64   `json:"duration_ms_avg"`
+				DurationMSSampleCount int      `json:"duration_ms_sample_count"`
 			} `json:"metrics"`
 		} `json:"buckets"`
 	} `json:"success"`
@@ -135,10 +139,14 @@ type bucketsResponse struct {
 			Count         int    `json:"count"`
 			CanceledCount int    `json:"canceled_count"`
 			Metrics       struct {
-				TPSAvg        *float64 `json:"tps_avg"`
-				TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
-				TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
-				DurationMSAvg *int64   `json:"duration_ms_avg"`
+				TPSAvg                *float64 `json:"tps_avg"`
+				TPSSampleCount        int      `json:"tps_sample_count"`
+				TTFTMillisAvg         *int64   `json:"ttft_ms_avg"`
+				TTFTMillisSampleCount int      `json:"ttft_ms_sample_count"`
+				TPOTMillisAvg         *int64   `json:"tpot_ms_avg"`
+				TPOTMillisSampleCount int      `json:"tpot_ms_sample_count"`
+				DurationMSAvg         *int64   `json:"duration_ms_avg"`
+				DurationMSSampleCount int      `json:"duration_ms_sample_count"`
 			} `json:"metrics"`
 		} `json:"buckets"`
 	} `json:"failure"`
@@ -852,6 +860,9 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if s.Buckets[0].Metrics.TTFTMillisAvg != nil || s.Buckets[0].Metrics.TPOTMillisAvg != nil || s.Buckets[0].Metrics.DurationMSAvg != nil {
 		t.Fatalf("empty bucket metrics expected null")
 	}
+	if s.Buckets[0].Metrics.TPSSampleCount != 0 || s.Buckets[0].Metrics.TTFTMillisSampleCount != 0 || s.Buckets[0].Metrics.TPOTMillisSampleCount != 0 || s.Buckets[0].Metrics.DurationMSSampleCount != 0 {
+		t.Fatalf("empty bucket metrics sample_count expected 0")
+	}
 
 	// Middle bucket (00:10-00:15) has 1 success row.
 	if s.Buckets[2].Start != "2026-01-01T00:10:00Z" {
@@ -862,6 +873,18 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	}
 	if s.Buckets[2].CanceledCount != 1 {
 		t.Fatalf("data bucket canceled_count: got %d want %d", s.Buckets[2].CanceledCount, 1)
+	}
+	if s.Buckets[2].Metrics.TPSSampleCount != 1 {
+		t.Fatalf("tps_sample_count: got=%d want=%d", s.Buckets[2].Metrics.TPSSampleCount, 1)
+	}
+	if s.Buckets[2].Metrics.TTFTMillisSampleCount != 1 {
+		t.Fatalf("ttft_ms_sample_count: got=%d want=%d", s.Buckets[2].Metrics.TTFTMillisSampleCount, 1)
+	}
+	if s.Buckets[2].Metrics.TPOTMillisSampleCount != 1 {
+		t.Fatalf("tpot_ms_sample_count: got=%d want=%d", s.Buckets[2].Metrics.TPOTMillisSampleCount, 1)
+	}
+	if s.Buckets[2].Metrics.DurationMSSampleCount != 1 {
+		t.Fatalf("duration_ms_sample_count: got=%d want=%d", s.Buckets[2].Metrics.DurationMSSampleCount, 1)
 	}
 	if s.Buckets[2].Metrics.TTFTMillisAvg == nil || *s.Buckets[2].Metrics.TTFTMillisAvg != 2 {
 		t.Fatalf("ttft_ms_avg: got=%v want=%d", s.Buckets[2].Metrics.TTFTMillisAvg, 2)
@@ -883,6 +906,9 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if f.Buckets[0].Metrics.TTFTMillisAvg != nil || f.Buckets[0].Metrics.TPOTMillisAvg != nil || f.Buckets[0].Metrics.DurationMSAvg != nil {
 		t.Fatalf("failure empty bucket metrics expected null")
 	}
+	if f.Buckets[0].Metrics.TPSSampleCount != 0 || f.Buckets[0].Metrics.TTFTMillisSampleCount != 0 || f.Buckets[0].Metrics.TPOTMillisSampleCount != 0 || f.Buckets[0].Metrics.DurationMSSampleCount != 0 {
+		t.Fatalf("failure empty bucket metrics sample_count expected 0")
+	}
 
 	// Middle bucket (00:10-00:15) has 2 failure rows: one non-2xx status and one 200+error_info streaming failure.
 	if f.Buckets[2].Start != "2026-01-01T00:10:00Z" {
@@ -893,6 +919,18 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	}
 	if f.Buckets[2].CanceledCount != 1 {
 		t.Fatalf("failure data bucket canceled_count: got %d want %d", f.Buckets[2].CanceledCount, 1)
+	}
+	if f.Buckets[2].Metrics.TPSSampleCount != 0 {
+		t.Fatalf("failure tps_sample_count: got=%d want=%d", f.Buckets[2].Metrics.TPSSampleCount, 0)
+	}
+	if f.Buckets[2].Metrics.TTFTMillisSampleCount != 1 {
+		t.Fatalf("failure ttft_ms_sample_count: got=%d want=%d", f.Buckets[2].Metrics.TTFTMillisSampleCount, 1)
+	}
+	if f.Buckets[2].Metrics.TPOTMillisSampleCount != 0 {
+		t.Fatalf("failure tpot_ms_sample_count: got=%d want=%d", f.Buckets[2].Metrics.TPOTMillisSampleCount, 0)
+	}
+	if f.Buckets[2].Metrics.DurationMSSampleCount != 1 {
+		t.Fatalf("failure duration_ms_sample_count: got=%d want=%d", f.Buckets[2].Metrics.DurationMSSampleCount, 1)
 	}
 	total := s.Buckets[2].Count + f.Buckets[2].Count + s.Buckets[2].CanceledCount
 	if total != 4 {
