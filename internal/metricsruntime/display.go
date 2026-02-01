@@ -11,6 +11,8 @@ import (
 	isatty "github.com/mattn/go-isatty"
 )
 
+const EnvMetricsProgressDisabled = "CLIPROXY_METRICS_PROGRESS_DISABLED"
+
 type liveDisplay struct {
 	state *RequestState
 	isTTY bool
@@ -72,6 +74,9 @@ func PrintProgress(state *RequestState, isTTY bool) {
 	if !isTTY {
 		return
 	}
+	if envBoolTrue(EnvMetricsProgressDisabled) {
+		return
+	}
 	snap := state.Snapshot()
 
 	trackingShort := shortTrackingID(snap.TrackingID)
@@ -109,6 +114,16 @@ func PrintProgress(state *RequestState, isTTY bool) {
 	)
 
 	_, _ = fmt.Fprintf(os.Stderr, "\r\033[2K%s", line)
+}
+
+func envBoolTrue(name string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	switch v {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 type summaryLine struct {

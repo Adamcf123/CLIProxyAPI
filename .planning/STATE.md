@@ -121,6 +121,7 @@ Count: 0
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 001 | Remove live metrics printing | 2026-02-01 | 44d4d24 | [001-remove-live-metrics-printing](./quick/001-remove-live-metrics-printing/) |
+| 003 | Disable metrics progress output via env | 2026-02-01 | 8ebd940 | [003-disable-metrics-progress-output-via-env-](./quick/003-disable-metrics-progress-output-via-env-/) |
 | 004 | kimi-for-coding: backfill reasoning_content for tool calls | 2026-02-01 | 3af2a38 | [004-kimi-for-coding-reasoning-content](./quick/004-kimi-for-coding-reasoning-content/) |
 
 ## Session Continuity
