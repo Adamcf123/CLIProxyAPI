@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 Phase: 11 of 11 (Runtime Validation)
 Plan: 4 of 4 in current phase
 Status: Phase complete (verified)
-Last activity: 2026-02-01 — Quick task 001: remove non-TTY live metrics printing (.planning/quick/001-remove-live-metrics-printing/001-SUMMARY.md)
+Last activity: 2026-02-01 — Quick task 003: disable metrics progress output via env (.planning/quick/003-disable-metrics-progress-output-via-env-/003-SUMMARY.md)
 
 Progress: [██████████] 100% of planned plans to date (39/39)
 
@@ -121,9 +121,11 @@ Count: 0
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 001 | Remove live metrics printing | 2026-02-01 | 44d4d24 | [001-remove-live-metrics-printing](./quick/001-remove-live-metrics-printing/) |
+| 002 | kimi-for-coding: strip thinking before upstream | 2026-02-01 | f53bb29 | [002-kimi-for-coding](./quick/002-kimi-for-coding/) |
+| 003 | Disable metrics progress output via env | 2026-02-01 | 8ebd940 | [003-disable-metrics-progress-output-via-env-](./quick/003-disable-metrics-progress-output-via-env-/) |
 
 ## Session Continuity
 
-Last session: 2026-02-01 20:10Z
-Stopped at: Quick task 001 complete (.planning/quick/001-remove-live-metrics-printing/001-SUMMARY.md)
+Last session: 2026-02-01 06:59Z
+Stopped at: Quick task 003 complete (.planning/quick/003-disable-metrics-progress-output-via-env-/003-SUMMARY.md)
 Resume file: None
