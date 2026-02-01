@@ -124,6 +124,10 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
 
+	// Kimi Claude-compatible /v1/messages requires reasoning_content on assistant tool_use
+	// messages when thinking is enabled; OpenCode may emit tool_use without a reasoning segment.
+	body = ensureKimiToolCallReasoningContent(baseModel, body)
+
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
 		body = ensureCacheControl(body)
@@ -264,6 +268,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
+
+	// Kimi Claude-compatible /v1/messages requires reasoning_content on assistant tool_use
+	// messages when thinking is enabled; OpenCode may emit tool_use without a reasoning segment.
+	body = ensureKimiToolCallReasoningContent(baseModel, body)
 
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
@@ -556,6 +564,68 @@ func disableThinkingIfToolChoiceForced(body []byte) []byte {
 		// Remove thinking configuration entirely to avoid API error
 		body, _ = sjson.DeleteBytes(body, "thinking")
 	}
+	return body
+}
+
+func ensureKimiToolCallReasoningContent(baseModel string, body []byte) []byte {
+	if baseModel != "kimi-for-coding" {
+		return body
+	}
+	if gjson.GetBytes(body, "thinking.type").String() != "enabled" {
+		return body
+	}
+
+	// Kimi validates reasoning_content for assistant tool calls when thinking is enabled.
+	// Empirically, empty/whitespace values are treated as missing, so we must ensure a non-empty string.
+	const placeholder = "."
+
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.Exists() || !messages.IsArray() {
+		return body
+	}
+
+	messages.ForEach(func(index, msg gjson.Result) bool {
+		if msg.Get("role").String() != "assistant" {
+			return true
+		}
+		content := msg.Get("content")
+		if !content.Exists() || !content.IsArray() {
+			return true
+		}
+		hasToolUse := false
+		content.ForEach(func(_, part gjson.Result) bool {
+			if part.Get("type").String() == "tool_use" {
+				hasToolUse = true
+				return false
+			}
+			return true
+		})
+		if !hasToolUse {
+			return true
+		}
+
+		rc := msg.Get("reasoning_content")
+		needsPatch := false
+		if !rc.Exists() {
+			needsPatch = true
+		} else if rc.Type != gjson.String {
+			// Treat null or unexpected types as invalid.
+			needsPatch = true
+		} else if strings.TrimSpace(rc.String()) == "" {
+			needsPatch = true
+		}
+		if !needsPatch {
+			return true
+		}
+
+		path := fmt.Sprintf("messages.%d.reasoning_content", index.Int())
+		updated, err := sjson.SetBytes(body, path, placeholder)
+		if err == nil {
+			body = updated
+		}
+		return true
+	})
+
 	return body
 }
 
