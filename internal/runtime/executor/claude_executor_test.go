@@ -61,3 +61,49 @@ func TestStripClaudeToolPrefixFromStreamLine(t *testing.T) {
 		t.Fatalf("content_block.name = %q, want %q", got, "alpha")
 	}
 }
+
+func TestEnsureKimiToolCallReasoningContent(t *testing.T) {
+	t.Run("kimi-for-coding adds empty reasoning_content for tool_use when thinking enabled", func(t *testing.T) {
+		input := []byte(`{"model":"kimi-for-coding","thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"my_tool","input":{}}]}]}`)
+		out := ensureKimiToolCallReasoningContent("kimi-for-coding", input)
+		msg := gjson.GetBytes(out, "messages.0")
+		if !msg.Get("reasoning_content").Exists() {
+			t.Fatalf("expected reasoning_content to be set")
+		}
+		if got := msg.Get("reasoning_content").String(); got != "" {
+			t.Fatalf("reasoning_content=%q, want empty string", got)
+		}
+	})
+
+	t.Run("kimi-for-coding does not override existing reasoning_content", func(t *testing.T) {
+		input := []byte(`{"model":"kimi-for-coding","thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"assistant","reasoning_content":"keep","content":[{"type":"tool_use","id":"t1","name":"my_tool","input":{}}]}]}`)
+		out := ensureKimiToolCallReasoningContent("kimi-for-coding", input)
+		if got := gjson.GetBytes(out, "messages.0.reasoning_content").String(); got != "keep" {
+			t.Fatalf("reasoning_content=%q, want %q", got, "keep")
+		}
+	})
+
+	t.Run("non-kimi model is unchanged", func(t *testing.T) {
+		input := []byte(`{"model":"claude-3-5-sonnet-20241022","thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"my_tool","input":{}}]}]}`)
+		out := ensureKimiToolCallReasoningContent("claude-3-5-sonnet-20241022", input)
+		if gjson.GetBytes(out, "messages.0.reasoning_content").Exists() {
+			t.Fatalf("expected reasoning_content to remain absent for non-kimi model")
+		}
+	})
+
+	t.Run("kimi-for-coding without thinking enabled is unchanged", func(t *testing.T) {
+		input := []byte(`{"model":"kimi-for-coding","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"my_tool","input":{}}]}]}`)
+		out := ensureKimiToolCallReasoningContent("kimi-for-coding", input)
+		if gjson.GetBytes(out, "messages.0.reasoning_content").Exists() {
+			t.Fatalf("expected reasoning_content to remain absent when thinking is not enabled")
+		}
+	})
+
+	t.Run("kimi-for-coding assistant text message is unchanged", func(t *testing.T) {
+		input := []byte(`{"model":"kimi-for-coding","thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"assistant","content":[{"type":"text","text":"hi"}]}]}`)
+		out := ensureKimiToolCallReasoningContent("kimi-for-coding", input)
+		if gjson.GetBytes(out, "messages.0.reasoning_content").Exists() {
+			t.Fatalf("expected reasoning_content to remain absent for non tool_use assistant message")
+		}
+	})
+}
