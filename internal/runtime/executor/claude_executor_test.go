@@ -61,3 +61,21 @@ func TestStripClaudeToolPrefixFromStreamLine(t *testing.T) {
 		t.Fatalf("content_block.name = %q, want %q", got, "alpha")
 	}
 }
+
+func TestNormalizeClaudeUpstreamPayload(t *testing.T) {
+	t.Run("kimi-for-coding strips thinking", func(t *testing.T) {
+		input := []byte(`{"model":"kimi-for-coding","max_tokens":32000,"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"my_tool","input":{}}]}]}`)
+		out := normalizeClaudeUpstreamPayload("kimi-for-coding", input)
+		if gjson.GetBytes(out, "thinking").Exists() {
+			t.Fatalf("thinking should be stripped for kimi-for-coding")
+		}
+	})
+
+	t.Run("other models keep thinking", func(t *testing.T) {
+		input := []byte(`{"model":"claude-3-5-sonnet-20241022","max_tokens":32000,"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"my_tool","input":{}}]}]}`)
+		out := normalizeClaudeUpstreamPayload("claude-3-5-sonnet-20241022", input)
+		if !gjson.GetBytes(out, "thinking").Exists() {
+			t.Fatalf("thinking should not be stripped for non kimi-for-coding models")
+		}
+	})
+}
