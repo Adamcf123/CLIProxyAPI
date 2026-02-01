@@ -126,10 +126,19 @@ type metricsPercentilesResponse struct {
 }
 
 type metricsBucketsMetrics struct {
-	TPSAvg        *float64 `json:"tps_avg"`
-	TTFTMillisAvg *int64   `json:"ttft_ms_avg"`
-	TPOTMillisAvg *int64   `json:"tpot_ms_avg"`
-	DurationMSAvg *int64   `json:"duration_ms_avg"`
+	// *_sample_count makes NULL averages unambiguous: the bucket may have requests
+	// (Count>0) but still have zero usable samples for a specific metric.
+	TPSAvg         *float64 `json:"tps_avg"`
+	TPSSampleCount int      `json:"tps_sample_count"`
+
+	TTFTMillisAvg         *int64 `json:"ttft_ms_avg"`
+	TTFTMillisSampleCount int    `json:"ttft_ms_sample_count"`
+
+	TPOTMillisAvg         *int64 `json:"tpot_ms_avg"`
+	TPOTMillisSampleCount int    `json:"tpot_ms_sample_count"`
+
+	DurationMSAvg         *int64 `json:"duration_ms_avg"`
+	DurationMSSampleCount int    `json:"duration_ms_sample_count"`
 }
 
 type metricsBucket struct {
@@ -594,6 +603,10 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		successFlagCase + " AS success_flag, " +
 		"((unixepoch(created_at) / ?) * ?) AS bucket_start, " +
 		"COUNT(*) AS count, " +
+		"SUM(CASE WHEN tps IS NOT NULL THEN 1 ELSE 0 END) AS tps_sample_count, " +
+		"SUM(CASE WHEN ttft IS NOT NULL THEN 1 ELSE 0 END) AS ttft_sample_count, " +
+		"SUM(CASE WHEN tpot IS NOT NULL THEN 1 ELSE 0 END) AS tpot_sample_count, " +
+		"SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END) AS duration_ms_sample_count, " +
 		"AVG(tps) AS tps_avg, " +
 		"AVG(ttft) AS ttft_avg, " +
 		"AVG(tpot) AS tpot_avg, " +
@@ -649,6 +662,10 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 			successFlag   int64
 			bucketStart   int64
 			countVal      int64
+			tpsSample     int64
+			ttftSample    int64
+			tpotSample    int64
+			durMSSample   int64
 			tpsAvg        sql.NullFloat64
 			ttftAvg       sql.NullFloat64
 			tpotAvg       sql.NullFloat64
@@ -661,6 +678,10 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 			&successFlag,
 			&bucketStart,
 			&countVal,
+			&tpsSample,
+			&ttftSample,
+			&tpotSample,
+			&durMSSample,
 			&tpsAvg,
 			&ttftAvg,
 			&tpotAvg,
@@ -680,7 +701,12 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 			target[key] = m
 		}
 
-		var metricsOut metricsBucketsMetrics
+		metricsOut := metricsBucketsMetrics{
+			TPSSampleCount:        int(tpsSample),
+			TTFTMillisSampleCount: int(ttftSample),
+			TPOTMillisSampleCount: int(tpotSample),
+			DurationMSSampleCount: int(durMSSample),
+		}
 		if tpsAvg.Valid {
 			v := tpsAvg.Float64
 			metricsOut.TPSAvg = &v
