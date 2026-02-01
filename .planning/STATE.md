@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 Phase: 11 of 11 (Runtime Validation)
 Plan: 4 of 4 in current phase
 Status: Phase complete (verified)
-Last activity: 2026-02-01 — Quick task 002: kimi-for-coding strip thinking before upstream (.planning/quick/002-kimi-for-coding/002-SUMMARY.md)
+Last activity: 2026-02-01 — Quick task 001: remove non-TTY live metrics printing (.planning/quick/001-remove-live-metrics-printing/001-SUMMARY.md)
 
 Progress: [██████████] 100% of planned plans to date (39/39)
 
@@ -121,10 +121,9 @@ Count: 0
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 001 | Remove live metrics printing | 2026-02-01 | 44d4d24 | [001-remove-live-metrics-printing](./quick/001-remove-live-metrics-printing/) |
-| 002 | kimi-for-coding: strip thinking before upstream | 2026-02-01 | f53bb29 | [002-kimi-for-coding](./quick/002-kimi-for-coding/) |
 
 ## Session Continuity
 
-Last session: 2026-02-01 06:57Z
-Stopped at: Quick task 002 complete (.planning/quick/002-kimi-for-coding/002-SUMMARY.md)
+Last session: 2026-02-01 20:10Z
+Stopped at: Quick task 001 complete (.planning/quick/001-remove-live-metrics-printing/001-SUMMARY.md)
 Resume file: None
