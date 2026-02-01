@@ -14,6 +14,50 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestOpenAICompatExecutorStreamIncludesUsageOption(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = body
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// Write a SSE stream with usage chunk
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	executor := NewOpenAICompatExecutor("openai", &config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"base_url": server.URL,
+		"api_key":  "test",
+	}}
+	payload := []byte(`{"model":"gpt-5.2","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	stream, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "gpt-5.2",
+		Payload: payload,
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("openai"),
+		Stream:       true,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+
+	// Consume the stream
+	for range stream {
+	}
+
+	// Verify stream_options.include_usage is set
+	if !gjson.GetBytes(gotBody, "stream_options.include_usage").Exists() {
+		t.Fatalf("expected stream_options.include_usage in request body, got: %s", string(gotBody))
+	}
+	if gjson.GetBytes(gotBody, "stream_options.include_usage").Bool() != true {
+		t.Fatalf("expected stream_options.include_usage=true, got: %s", string(gotBody))
+	}
+}
+
 func TestOpenAICompatExecutorCompactPassthrough(t *testing.T) {
 	var gotPath string
 	var gotBody []byte
