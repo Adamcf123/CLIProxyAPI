@@ -575,6 +575,10 @@ func ensureKimiToolCallReasoningContent(baseModel string, body []byte) []byte {
 		return body
 	}
 
+	// Kimi validates reasoning_content for assistant tool calls when thinking is enabled.
+	// Empirically, empty/whitespace values are treated as missing, so we must ensure a non-empty string.
+	const placeholder = "."
+
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.Exists() || !messages.IsArray() {
 		return body
@@ -582,10 +586,6 @@ func ensureKimiToolCallReasoningContent(baseModel string, body []byte) []byte {
 
 	messages.ForEach(func(index, msg gjson.Result) bool {
 		if msg.Get("role").String() != "assistant" {
-			return true
-		}
-		// Only patch tool-call assistant messages, and only when missing.
-		if msg.Get("reasoning_content").Exists() {
 			return true
 		}
 		content := msg.Get("content")
@@ -604,8 +604,22 @@ func ensureKimiToolCallReasoningContent(baseModel string, body []byte) []byte {
 			return true
 		}
 
+		rc := msg.Get("reasoning_content")
+		needsPatch := false
+		if !rc.Exists() {
+			needsPatch = true
+		} else if rc.Type != gjson.String {
+			// Treat null or unexpected types as invalid.
+			needsPatch = true
+		} else if strings.TrimSpace(rc.String()) == "" {
+			needsPatch = true
+		}
+		if !needsPatch {
+			return true
+		}
+
 		path := fmt.Sprintf("messages.%d.reasoning_content", index.Int())
-		updated, err := sjson.SetBytes(body, path, "")
+		updated, err := sjson.SetBytes(body, path, placeholder)
 		if err == nil {
 			body = updated
 		}
