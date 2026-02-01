@@ -87,6 +87,10 @@ curl -sS \
   "http://127.0.0.1:${PORT}/v0/management/metrics?mode=percentiles"
 ```
 
+Notes:
+- `mode=percentiles` includes per-metric `sample_count` fields; when `sample_count=0`, the corresponding percentiles are `null`.
+- `mode=buckets` keeps empty buckets for alignment and includes per-metric `*_sample_count`; when `*_sample_count=0`, the corresponding averages are `null`.
+
 ### Best-effort Metrics Persistence Contract
 
 Metrics persistence is **best-effort** by design: the request path must never block on SQLite writes.

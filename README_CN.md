@@ -87,6 +87,10 @@ curl -sS \
   "http://127.0.0.1:${PORT}/v0/management/metrics?limit=10"
 ```
 
+说明：
+- `mode=percentiles` 会为每个指标返回 `sample_count`；当 `sample_count=0` 时，对应分位数为 `null`。
+- `mode=buckets` 会保留空 bucket 以保持时间轴对齐，并为每个指标返回 `*_sample_count`；当 `*_sample_count=0` 时，对应均值为 `null`。
+
 ## Amp CLI 支持
 
 CLIProxyAPI 已内置对 [Amp CLI](https://ampcode.com) 和 Amp IDE 扩展的支持，可让你使用自己的 Google/ChatGPT/Claude OAuth 订阅来配合 Amp 编码工具：
