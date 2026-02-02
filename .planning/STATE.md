@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 Phase: 11 of 11 (Runtime Validation)
 Plan: 4 of 4 in current phase
 Status: Phase complete (verified)
-Last activity: 2026-02-02 - Completed quick task 005: streaming metrics content detection fixes (Responses + kimi-for-coding)
+Last activity: 2026-02-02 - Completed quick task 006: buckets tps_e2e_avg (tps_e2e_sample_count)
 
 Progress: [██████████] 100% of planned plans to date (39/39)
 
@@ -124,9 +124,10 @@ Count: 0
 | 003 | Disable metrics progress output via env | 2026-02-01 | 8ebd940 | [003-disable-metrics-progress-output-via-env-](./quick/003-disable-metrics-progress-output-via-env-/) |
 | 004 | kimi-for-coding: backfill reasoning_content for tool calls | 2026-02-01 | 3af2a38 | [004-kimi-for-coding-reasoning-content](./quick/004-kimi-for-coding-reasoning-content/) |
 | 005 | streaming metrics: content detection for Responses + kimi-for-coding tool streaming | 2026-02-02 | 233f709 | [005-metrics-streaming-content-detection](./quick/005-metrics-streaming-content-detection/) |
+| 006 | buckets: add tps_e2e_avg + sample_count | 2026-02-02 | 0f70a8e | [006-10-20-60m-tps-e2e-avg](./quick/006-10-20-60m-tps-e2e-avg/) |
 
 ## Session Continuity
 
-Last session: 2026-02-02 05:53Z
-Stopped at: Quick task 005 complete (.planning/quick/005-metrics-streaming-content-detection/005-SUMMARY.md)
+Last session: 2026-02-02 08:40Z
+Stopped at: Quick task 006 complete (.planning/quick/006-10-20-60m-tps-e2e-avg/006-SUMMARY.md)
 Resume file: None
