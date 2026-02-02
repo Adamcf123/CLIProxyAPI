@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2025-01-29)
 Phase: 11 of 11 (Runtime Validation)
 Plan: 4 of 4 in current phase
 Status: Phase complete (verified)
-Last activity: 2026-02-02 - Completed quick task 005: streaming metrics content detection fixes (Responses + kimi-for-coding)
+Last activity: 2026-02-02 - Completed quick task 008: metrics_summary align window_stats/errors_total key
 
 Progress: [██████████] 100% of planned plans to date (39/39)
 
@@ -123,9 +123,12 @@ Count: 0
 | 001 | Remove live metrics printing | 2026-02-01 | 44d4d24 | [001-remove-live-metrics-printing](./quick/001-remove-live-metrics-printing/) |
 | 004 | kimi-for-coding: backfill reasoning_content for tool calls | 2026-02-01 | 3af2a38 | [004-kimi-for-coding-reasoning-content](./quick/004-kimi-for-coding-reasoning-content/) |
 | 005 | streaming metrics: content detection for Responses + kimi-for-coding tool streaming | 2026-02-02 | 233f709 | [005-metrics-streaming-content-detection](./quick/005-metrics-streaming-content-detection/) |
+| 006 | buckets: add tps_e2e_avg + sample_count | 2026-02-02 | 0f70a8e | [006-10-20-60m-tps-e2e-avg](./quick/006-10-20-60m-tps-e2e-avg/) |
+| 007 | metrics_summary: include provider/model window_stats + errors_total | 2026-02-02 | 2c3e6f2 | [007-metrics-summary-include-provider-model-w](./quick/007-metrics-summary-include-provider-model-w/) |
+| 008 | metrics_summary: align window_stats/errors_total key with displayed provider/model | 2026-02-02 | e3e66a3 | [008-metrics-summary-align-window-stats-error](./quick/008-metrics-summary-align-window-stats-error/) |
 
 ## Session Continuity
 
-Last session: 2026-02-02 05:53Z
-Stopped at: Quick task 005 complete (.planning/quick/005-metrics-streaming-content-detection/005-SUMMARY.md)
+Last session: 2026-02-02 10:53Z
+Stopped at: Quick task 008 complete (.planning/quick/008-metrics-summary-align-window-stats-error/008-SUMMARY.md)
 Resume file: None
