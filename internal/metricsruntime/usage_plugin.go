@@ -2,6 +2,7 @@ package metricsruntime
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +12,21 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricspersist"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
+
+func metricKeyFromStateOrRecord(snap RequestStateSnapshot, record usage.Record) (metrics.MetricKey, bool) {
+	provider := strings.TrimSpace(snap.Provider)
+	if provider == "" {
+		provider = strings.TrimSpace(record.Provider)
+	}
+	model := strings.TrimSpace(snap.Model)
+	if model == "" {
+		model = strings.TrimSpace(record.Model)
+	}
+	if provider == "" || model == "" {
+		return metrics.MetricKey{}, false
+	}
+	return metrics.MetricKey{Provider: provider, Model: model, Streaming: snap.Streaming}, true
+}
 
 var enqueueMetricRecord = metricspersist.Enqueue
 
@@ -105,9 +121,18 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		state, _ = GetRequestState(ginCtx)
 		if state != nil {
 			snap = state.Snapshot()
+			// display.go always reads provider/model from RequestStateSnapshot. When upstream
+			// didn't set them, backfill from the usage record so metrics_summary stays usable.
+			if strings.TrimSpace(snap.Provider) == "" && strings.TrimSpace(record.Provider) != "" {
+				state.SetProvider(record.Provider)
+				snap.Provider = record.Provider
+			}
+			if strings.TrimSpace(snap.Model) == "" && strings.TrimSpace(record.Model) != "" {
+				state.SetModel(record.Model)
+				snap.Model = record.Model
+			}
 			isCanceled = snap.IsClientCanceled()
-			key = metrics.MetricKey{Provider: record.Provider, Model: record.Model, Streaming: snap.Streaming}
-			hasKey = true
+			key, hasKey = metricKeyFromStateOrRecord(snap, record)
 			// Prefer state tracking ID if available.
 			if snap.TrackingID != "" {
 				trackingID = snap.TrackingID
@@ -168,7 +193,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 
 	// Compute TPS/TPOT when we have output tokens and sufficient timing data.
 	// Note: even when TPS/TPOT are suppressed for confidence reasons, TTFT is still logged above.
-	if outputTokens > 0 && state != nil && !isCanceled {
+	if outputTokens > 0 && state != nil && !isCanceled && hasKey {
 		// Build RequestMetrics for calculation.
 		m := &metrics.RequestMetrics{
 			TrackingID: trackingID,
