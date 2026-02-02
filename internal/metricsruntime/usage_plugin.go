@@ -14,10 +14,13 @@ import (
 var enqueueMetricRecord = metricspersist.Enqueue
 
 const (
-	minOutputTokensForRates            = 16
-	minStreamingContentTokenChunks     = 2
-	minNonStreamingTotalDuration       = 300 * time.Millisecond
-	minStreamingPostFirstTokenDuration = 300 * time.Millisecond
+	minOutputTokensForRates        = 16
+	minStreamingContentTokenChunks = 2
+	minNonStreamingTotalDuration   = 300 * time.Millisecond
+	// Keep a small floor to avoid extreme TPS spikes from near-zero durations.
+	// With event-aware content chunk counting, we can be less strict than 300ms and
+	// still suppress the "single flush at the end" buffered-stream pattern.
+	minStreamingPostFirstTokenDuration = 50 * time.Millisecond
 )
 
 // MetricsPlugin implements sdk/cliproxy/usage.Plugin to calculate performance
