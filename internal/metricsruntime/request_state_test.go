@@ -97,6 +97,31 @@ func TestMaybeRecordFirstContentToken_ClaudeToolInputJSONDeltaCountsAsContent(t 
 	}
 }
 
+func TestMaybeRecordFirstContentToken_ClaudeThinkingDeltaCountsAsContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	state := NewRequestState(true, "kimi-for-coding")
+	AttachRequestState(c, state)
+
+	chunk := []byte("event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}\n\n")
+	when := time.Unix(600, 0)
+	MaybeRecordFirstContentToken(c, chunk, when)
+
+	snap := state.Snapshot()
+	if snap.FirstContentTokenAt == nil {
+		t.Fatalf("expected FirstContentTokenAt to be set for thinking_delta")
+	}
+	if !snap.FirstContentTokenAt.Equal(when) {
+		t.Fatalf("expected FirstContentTokenAt=%v, got %v", when, *snap.FirstContentTokenAt)
+	}
+	if snap.ContentTokenChunks != 1 {
+		t.Fatalf("expected ContentTokenChunks=1, got %d", snap.ContentTokenChunks)
+	}
+}
+
 func TestMaybeRecordFirstContentToken_OpenAIResponsesOutputTextDelta(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -121,6 +146,64 @@ func TestMaybeRecordFirstContentToken_OpenAIResponsesOutputTextDelta(t *testing.
 	}
 	if !snap.LastContentTokenAt.Equal(want) {
 		t.Fatalf("expected LastContentTokenAt=%v, got %v", want, *snap.LastContentTokenAt)
+	}
+	if snap.ContentTokenChunks != 1 {
+		t.Fatalf("expected ContentTokenChunks=1, got %d", snap.ContentTokenChunks)
+	}
+}
+
+func TestMaybeRecordFirstContentToken_OpenAIResponsesOutputTextDelta_EventLineCarriesType(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	state := NewRequestState(true, "gpt-5.2")
+	AttachRequestState(c, state)
+
+	chunk := []byte("event: response.output_text.delta\n" +
+		"data: {\"delta\":\"hi\"}\n\n")
+	want := time.Unix(301, 0)
+	MaybeRecordFirstContentToken(c, chunk, want)
+
+	snap := state.Snapshot()
+	if snap.FirstContentTokenAt == nil {
+		t.Fatalf("expected FirstContentTokenAt to be set")
+	}
+	if !snap.FirstContentTokenAt.Equal(want) {
+		t.Fatalf("expected FirstContentTokenAt=%v, got %v", want, *snap.FirstContentTokenAt)
+	}
+	if snap.ContentTokenChunks != 1 {
+		t.Fatalf("expected ContentTokenChunks=1, got %d", snap.ContentTokenChunks)
+	}
+}
+
+func TestMaybeRecordFirstContentToken_OpenAIResponsesOutputTextDelta_SplitAcrossChunks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	state := NewRequestState(true, "gpt-5.2")
+	AttachRequestState(c, state)
+
+	// Simulate TCP chunking that splits the JSON payload across writes.
+	chunk1 := []byte("event: response.output_text.delta\n" +
+		"data: {\"delta\":\"hel")
+	chunk2 := []byte("lo\"}\n\n")
+
+	MaybeRecordFirstContentToken(c, chunk1, time.Unix(310, 0))
+	if snap := state.Snapshot(); snap.FirstContentTokenAt != nil {
+		t.Fatalf("expected FirstContentTokenAt to remain nil for partial SSE frame")
+	}
+
+	want := time.Unix(311, 0)
+	MaybeRecordFirstContentToken(c, chunk2, want)
+
+	snap := state.Snapshot()
+	if snap.FirstContentTokenAt == nil {
+		t.Fatalf("expected FirstContentTokenAt to be set")
+	}
+	if !snap.FirstContentTokenAt.Equal(want) {
+		t.Fatalf("expected FirstContentTokenAt=%v, got %v", want, *snap.FirstContentTokenAt)
 	}
 	if snap.ContentTokenChunks != 1 {
 		t.Fatalf("expected ContentTokenChunks=1, got %d", snap.ContentTokenChunks)
