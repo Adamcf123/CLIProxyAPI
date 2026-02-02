@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricspersist"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
@@ -137,5 +138,50 @@ func TestMetricsPlugin_HandleUsage_CanceledPersists499AndNilErrorInfo(t *testing
 	// canceled requests must not be aggregated into TPSCollector-derived metrics.
 	if snap := state.Snapshot(); snap.Metrics != nil {
 		t.Fatalf("expected RequestState.Metrics to remain nil for canceled request")
+	}
+
+	key := metrics.MetricKey{Provider: record.Provider, Model: record.Model, Streaming: state.Snapshot().Streaming}
+	ws, ok := p.collector.GetWindowStats(key)
+	if ok || ws.Count != 0 {
+		t.Fatalf("expected canceled request to not enter TPSCollector window, got ok=%v count=%d", ok, ws.Count)
+	}
+}
+
+func TestMetricsPlugin_HandleUsage_PopulatesCollectorWindowStatsForNonCanceled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	origEnqueue := enqueueMetricRecord
+	defer func() { enqueueMetricRecord = origEnqueue }()
+	// Avoid persistence side effects; this test only needs the in-memory collector.
+	enqueueMetricRecord = func(r metricspersist.MetricRecord) {}
+
+	p := NewMetricsPlugin(nil)
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	state := NewRequestState(false, "gpt-5.2")
+	state.StartedAt = time.Now().Add(-1 * time.Second)
+	state.SetStatusCode(200)
+	AttachRequestState(ginCtx, state)
+
+	ctx := context.WithValue(context.Background(), "gin", ginCtx)
+	record := usage.Record{
+		Provider: "openai",
+		Model:    "gpt-5.2",
+		Detail: usage.Detail{
+			OutputTokens: 100,
+			TotalTokens:  100,
+		},
+	}
+
+	p.HandleUsage(ctx, record)
+
+	key := metrics.MetricKey{Provider: record.Provider, Model: record.Model, Streaming: state.Snapshot().Streaming}
+	ws, ok := p.collector.GetWindowStats(key)
+	if !ok {
+		t.Fatalf("expected collector GetWindowStats ok=true")
+	}
+	if ws.Count <= 0 {
+		t.Fatalf("expected collector window count > 0, got %d", ws.Count)
 	}
 }
