@@ -6,6 +6,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -123,9 +124,9 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
 
-	// Kimi Claude-compatible /v1/messages requires reasoning_content on assistant tool_use
-	// messages when thinking is enabled; OpenCode may emit tool_use without a reasoning segment.
-	body = ensureKimiToolCallReasoningContent(baseModel, body)
+	// Kimi /v1/messages enforces thinking blocks for tool calls when thinking is enabled.
+	// OpenCode may emit tool_use messages without any thinking content blocks.
+	body = ensureKimiToolCallThinkingBlock(baseModel, body)
 
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
@@ -267,9 +268,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
 
-	// Kimi Claude-compatible /v1/messages requires reasoning_content on assistant tool_use
-	// messages when thinking is enabled; OpenCode may emit tool_use without a reasoning segment.
-	body = ensureKimiToolCallReasoningContent(baseModel, body)
+	// Kimi /v1/messages enforces thinking blocks for tool calls when thinking is enabled.
+	// OpenCode may emit tool_use messages without any thinking content blocks.
+	body = ensureKimiToolCallThinkingBlock(baseModel, body)
 
 	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
 	if countCacheControls(body) == 0 {
@@ -565,7 +566,7 @@ func disableThinkingIfToolChoiceForced(body []byte) []byte {
 	return body
 }
 
-func ensureKimiToolCallReasoningContent(baseModel string, body []byte) []byte {
+func ensureKimiToolCallThinkingBlock(baseModel string, body []byte) []byte {
 	if baseModel != "kimi-for-coding" {
 		return body
 	}
@@ -573,8 +574,8 @@ func ensureKimiToolCallReasoningContent(baseModel string, body []byte) []byte {
 		return body
 	}
 
-	// Kimi validates reasoning_content for assistant tool calls when thinking is enabled.
-	// Empirically, empty/whitespace values are treated as missing, so we must ensure a non-empty string.
+	// Kimi requires a non-empty thinking content block on assistant tool_use messages.
+	// Empirically, empty/whitespace thinking is treated as missing.
 	const placeholder = "."
 
 	messages := gjson.GetBytes(body, "messages")
@@ -591,33 +592,49 @@ func ensureKimiToolCallReasoningContent(baseModel string, body []byte) []byte {
 			return true
 		}
 		hasToolUse := false
-		content.ForEach(func(_, part gjson.Result) bool {
-			if part.Get("type").String() == "tool_use" {
+		hasValidThinking := false
+		thinkingIndex := int64(-1)
+		content.ForEach(func(partIndex, part gjson.Result) bool {
+			switch part.Get("type").String() {
+			case "tool_use":
 				hasToolUse = true
-				return false
+			case "thinking":
+				thinkingIndex = partIndex.Int()
+				if strings.TrimSpace(part.Get("thinking").String()) != "" {
+					hasValidThinking = true
+				}
 			}
 			return true
 		})
 		if !hasToolUse {
 			return true
 		}
-
-		rc := msg.Get("reasoning_content")
-		needsPatch := false
-		if !rc.Exists() {
-			needsPatch = true
-		} else if rc.Type != gjson.String {
-			// Treat null or unexpected types as invalid.
-			needsPatch = true
-		} else if strings.TrimSpace(rc.String()) == "" {
-			needsPatch = true
-		}
-		if !needsPatch {
+		if hasValidThinking {
 			return true
 		}
 
-		path := fmt.Sprintf("messages.%d.reasoning_content", index.Int())
-		updated, err := sjson.SetBytes(body, path, placeholder)
+		// If a thinking block exists but is empty/whitespace, patch it in-place.
+		if thinkingIndex >= 0 {
+			path := fmt.Sprintf("messages.%d.content.%d.thinking", index.Int(), thinkingIndex)
+			updated, err := sjson.SetBytes(body, path, placeholder)
+			if err == nil {
+				body = updated
+			}
+			return true
+		}
+
+		// Otherwise, prepend a minimal thinking block before tool_use.
+		var parts []any
+		if err := json.Unmarshal([]byte(content.Raw), &parts); err != nil {
+			return true
+		}
+		parts = append([]any{map[string]any{"type": "thinking", "thinking": placeholder}}, parts...)
+		patchedRaw, err := json.Marshal(parts)
+		if err != nil {
+			return true
+		}
+		path := fmt.Sprintf("messages.%d.content", index.Int())
+		updated, err := sjson.SetRawBytes(body, path, patchedRaw)
 		if err == nil {
 			body = updated
 		}
