@@ -33,6 +33,10 @@ completed: 2026-02-02
   - 从 `TPSCollector.GetWindowStats(key)` 读取窗口统计并写入当前 RequestState
   - 按 `snap.IsFailure() && !snap.IsClientCanceled()` 口径更新 errors_total（排除 canceled=499）
 
+## Notes
+
+- 由于当前工作区存在未提交的并行改动（例如 `internal/api/server.go` / `internal/metricsruntime/request_state_test.go`），本 quick task 的 Task 1 commit 中也包含了对同目录下运行时指标相关实现的兼容性修复（属于阻塞修复，确保 `go test ./...` 在当前工作区可通过）。
+
 ## Tests
 
 - `go test ./...`
