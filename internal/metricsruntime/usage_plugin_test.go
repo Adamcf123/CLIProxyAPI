@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/metrics"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/metricspersist"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
@@ -34,6 +35,8 @@ func TestMetricsPlugin_HandleUsage_MapsLastErrorToErrorInfo(t *testing.T) {
 		ginCtx, _ := gin.CreateTestContext(rec)
 
 		state := NewRequestState(true, "gpt-5.2")
+		state.SetProvider("anthropic")
+		state.SetModel("claude-3.5")
 		state.SetLastError(errors.New("boom"))
 		AttachRequestState(ginCtx, state)
 
@@ -56,6 +59,12 @@ func TestMetricsPlugin_HandleUsage_MapsLastErrorToErrorInfo(t *testing.T) {
 				got = *captured.ErrorInfo
 			}
 			t.Fatalf("expected ErrorInfo=\"boom\", got %q", got)
+		}
+		if captured.Provider != record.Provider {
+			t.Fatalf("expected persisted Provider=%q, got %q", record.Provider, captured.Provider)
+		}
+		if captured.Model != record.Model {
+			t.Fatalf("expected persisted Model=%q, got %q", record.Model, captured.Model)
 		}
 	})
 
@@ -97,6 +106,8 @@ func TestMetricsPlugin_HandleUsage_CanceledPersists499AndNilErrorInfo(t *testing
 	rec := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(rec)
 	state := NewRequestState(false, "gpt-5.2")
+	state.SetProvider("anthropic")
+	state.SetModel("claude-3.5")
 	// Ensure the non-canceled path would be able to compute rates if it ran.
 	state.StartedAt = time.Now().Add(-1 * time.Second)
 	state.SetStatusCode(200)
@@ -138,4 +149,93 @@ func TestMetricsPlugin_HandleUsage_CanceledPersists499AndNilErrorInfo(t *testing
 	if snap := state.Snapshot(); snap.Metrics != nil {
 		t.Fatalf("expected RequestState.Metrics to remain nil for canceled request")
 	}
+
+	snap := state.Snapshot()
+	key := metrics.MetricKey{Provider: snap.Provider, Model: snap.Model, Streaming: snap.Streaming}
+	ws, ok := p.collector.GetWindowStats(key)
+	if ok || ws.Count != 0 {
+		t.Fatalf("expected canceled request to not enter TPSCollector window, got ok=%v count=%d", ok, ws.Count)
+	}
+}
+
+func TestMetricsPlugin_HandleUsage_PopulatesCollectorWindowStatsForNonCanceled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	origEnqueue := enqueueMetricRecord
+	defer func() { enqueueMetricRecord = origEnqueue }()
+	// Avoid persistence side effects; this test only needs the in-memory collector.
+	enqueueMetricRecord = func(r metricspersist.MetricRecord) {}
+
+	t.Run("baseline: record provider/model (when state matches or is empty)", func(t *testing.T) {
+		p := NewMetricsPlugin(nil)
+
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		state := NewRequestState(false, "gpt-5.2")
+		state.StartedAt = time.Now().Add(-1 * time.Second)
+		state.SetStatusCode(200)
+		AttachRequestState(ginCtx, state)
+
+		ctx := context.WithValue(context.Background(), "gin", ginCtx)
+		record := usage.Record{
+			Provider: "openai",
+			Model:    "gpt-5.2",
+			Detail: usage.Detail{
+				OutputTokens: 100,
+				TotalTokens:  100,
+			},
+		}
+
+		p.HandleUsage(ctx, record)
+
+		key := metrics.MetricKey{Provider: record.Provider, Model: record.Model, Streaming: state.Snapshot().Streaming}
+		ws, ok := p.collector.GetWindowStats(key)
+		if !ok {
+			t.Fatalf("expected collector GetWindowStats ok=true")
+		}
+		if ws.Count <= 0 {
+			t.Fatalf("expected collector window count > 0, got %d", ws.Count)
+		}
+	})
+
+	t.Run("state provider/model overrides record for collector key", func(t *testing.T) {
+		p := NewMetricsPlugin(nil)
+
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		state := NewRequestState(false, "gpt-5.2")
+		state.SetProvider("anthropic")
+		state.SetModel("claude-3.5")
+		state.StartedAt = time.Now().Add(-1 * time.Second)
+		state.SetStatusCode(200)
+		AttachRequestState(ginCtx, state)
+
+		ctx := context.WithValue(context.Background(), "gin", ginCtx)
+		record := usage.Record{
+			Provider: "openai",
+			Model:    "gpt-5.2",
+			Detail: usage.Detail{
+				OutputTokens: 100,
+				TotalTokens:  100,
+			},
+		}
+
+		p.HandleUsage(ctx, record)
+
+		snap := state.Snapshot()
+		keyAligned := metrics.MetricKey{Provider: snap.Provider, Model: snap.Model, Streaming: snap.Streaming}
+		wsAligned, okAligned := p.collector.GetWindowStats(keyAligned)
+		if !okAligned {
+			t.Fatalf("expected aligned collector GetWindowStats ok=true")
+		}
+		if wsAligned.Count <= 0 {
+			t.Fatalf("expected aligned collector window count > 0, got %d", wsAligned.Count)
+		}
+
+		keyRecord := metrics.MetricKey{Provider: record.Provider, Model: record.Model, Streaming: snap.Streaming}
+		wsRecord, okRecord := p.collector.GetWindowStats(keyRecord)
+		if okRecord && wsRecord.Count > 0 {
+			t.Fatalf("expected record key to not be used for aggregation, got ok=%v count=%d", okRecord, wsRecord.Count)
+		}
+	})
 }
