@@ -21,6 +21,10 @@ const (
 	statusClientClosedRequest = 499
 	statusInternalServerError = 500
 	statusGatewayTimeout      = 504
+
+	// maxSSEBufferBytes caps the per-request buffer used to parse SSE frames that may be
+	// split across TCP/HTTP chunk boundaries.
+	maxSSEBufferBytes = 64 * 1024
 )
 
 type RequestState struct {
@@ -48,10 +52,30 @@ type RequestState struct {
 	InputTokens  *int
 	OutputTokens *int
 	Metrics      *metrics.RequestMetrics
+	WindowStats  RequestWindowStats
+	ErrorsTotal  int
 
 	LastError string
 
+	// sseBuf buffers partial SSE frames across chunk boundaries so we can
+	// reliably detect first user-visible content.
+	sseBuf []byte
+	// sseLastEventName tracks the most recently observed SSE event name. Some
+	// providers put the event type in the SSE `event:` line while `data:` only
+	// carries a minimal JSON payload.
+	sseLastEventName string
+
 	firstTokenOnce sync.Once
+}
+
+// RequestWindowStats is the metrics_summary.window_stats payload.
+// It represents per-provider/model/streaming sliding window averages.
+// Avg fields are nil when the window is empty.
+type RequestWindowStats struct {
+	Count   int      `json:"count"`
+	TPSAvg  *float64 `json:"tps_avg"`
+	TTFTAvg *float64 `json:"ttft_avg"`
+	TPOTAvg *float64 `json:"tpot_avg"`
 }
 
 type RequestStateSnapshot struct {
@@ -71,6 +95,8 @@ type RequestStateSnapshot struct {
 	InputTokens  *int
 	OutputTokens *int
 	Metrics      *metrics.RequestMetrics
+	WindowStats  RequestWindowStats
+	ErrorsTotal  int
 
 	LastError string
 }
@@ -113,6 +139,21 @@ func (s *RequestState) Snapshot() RequestStateSnapshot {
 		StatusCode:         s.StatusCode,
 		LastError:          s.LastError,
 		ContentTokenChunks: s.ContentTokenChunks,
+		ErrorsTotal:        s.ErrorsTotal,
+	}
+	// window_stats uses nil pointers to express "no data" in metrics_summary JSON.
+	snap.WindowStats.Count = s.WindowStats.Count
+	if s.WindowStats.TPSAvg != nil {
+		v := *s.WindowStats.TPSAvg
+		snap.WindowStats.TPSAvg = &v
+	}
+	if s.WindowStats.TTFTAvg != nil {
+		v := *s.WindowStats.TTFTAvg
+		snap.WindowStats.TTFTAvg = &v
+	}
+	if s.WindowStats.TPOTAvg != nil {
+		v := *s.WindowStats.TPOTAvg
+		snap.WindowStats.TPOTAvg = &v
 	}
 	if s.FirstContentTokenAt != nil {
 		t := *s.FirstContentTokenAt
@@ -135,6 +176,39 @@ func (s *RequestState) Snapshot() RequestStateSnapshot {
 		snap.Metrics = &m
 	}
 	return snap
+}
+
+func (s *RequestState) SetWindowStats(stats RequestWindowStats) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.WindowStats.Count = stats.Count
+	s.WindowStats.TPSAvg = nil
+	s.WindowStats.TTFTAvg = nil
+	s.WindowStats.TPOTAvg = nil
+	if stats.TPSAvg != nil {
+		v := *stats.TPSAvg
+		s.WindowStats.TPSAvg = &v
+	}
+	if stats.TTFTAvg != nil {
+		v := *stats.TTFTAvg
+		s.WindowStats.TTFTAvg = &v
+	}
+	if stats.TPOTAvg != nil {
+		v := *stats.TPOTAvg
+		s.WindowStats.TPOTAvg = &v
+	}
+	s.mu.Unlock()
+}
+
+func (s *RequestState) SetErrorsTotal(total int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.ErrorsTotal = total
+	s.mu.Unlock()
 }
 
 func (s *RequestState) SetProvider(provider string) {
@@ -327,7 +401,7 @@ func MaybeRecordFirstContentToken(c *gin.Context, chunk []byte, now time.Time) {
 	if now.IsZero() {
 		return
 	}
-	contentEvents := countContentTokenEvents(chunk)
+	contentEvents := state.countContentTokenEvents(chunk)
 	if contentEvents <= 0 {
 		return
 	}
@@ -346,6 +420,31 @@ func MaybeRecordFirstContentToken(c *gin.Context, chunk []byte, now time.Time) {
 	})
 }
 
+func (s *RequestState) countContentTokenEvents(chunk []byte) int {
+	if s == nil {
+		return 0
+	}
+	trimmed := bytes.TrimSpace(chunk)
+	if len(trimmed) == 0 {
+		return 0
+	}
+
+	// If this looks like SSE (or we are already buffering a partial SSE line),
+	// use a stateful line-based parser so we can handle TCP/HTTP chunk splits.
+	s.mu.Lock()
+	useSSE := len(s.sseBuf) > 0 || looksLikeSSE(trimmed)
+	if useSSE {
+		count, rest, lastEventName := countSSEContentTokenEventsByLines(s.sseBuf, chunk, s.sseLastEventName)
+		s.sseBuf = rest
+		s.sseLastEventName = lastEventName
+		s.mu.Unlock()
+		return count
+	}
+	s.mu.Unlock()
+
+	return countContentTokenEvents(chunk)
+}
+
 func countContentTokenEvents(chunk []byte) int {
 	trimmed := bytes.TrimSpace(chunk)
 	if len(trimmed) == 0 {
@@ -359,27 +458,9 @@ func countContentTokenEvents(chunk []byte) int {
 		return 0
 	}
 
-	// SSE: parse data: lines and inspect payload.
+	// SSE: stateless best-effort parsing for whole frames inside a chunk.
 	if looksLikeSSE(trimmed) {
-		count := 0
-		for _, payload := range extractSSEDataPayloads(trimmed) {
-			p := bytes.TrimSpace(payload)
-			if len(p) == 0 {
-				continue
-			}
-			if bytes.Equal(p, []byte("[DONE]")) {
-				continue
-			}
-			if jsonHasContentToken(p) {
-				count++
-				continue
-			}
-			// Non-JSON data payload; treat as content.
-			if p[0] != '{' && p[0] != '[' {
-				count++
-				continue
-			}
-		}
+		count, _, _ := countSSEContentTokenEventsByLines(nil, chunk, "")
 		return count
 	}
 
@@ -400,20 +481,200 @@ func looksLikeSSE(b []byte) bool {
 	return false
 }
 
-func extractSSEDataPayloads(b []byte) [][]byte {
-	// SSE allows multiple data: lines; each is part of the same event.
-	// We treat each data: line as a candidate payload.
-	lines := bytes.Split(b, []byte("\n"))
-	var out [][]byte
-	for _, line := range lines {
-		line = bytes.TrimSpace(line)
-		if !bytes.HasPrefix(line, []byte("data:")) {
+func countSSEContentTokenEventsByLines(buf []byte, chunk []byte, lastEventName string) (count int, rest []byte, updatedEventName string) {
+	updatedEventName = lastEventName
+	if len(chunk) == 0 {
+		return 0, buf, updatedEventName
+	}
+
+	combined := append(buf, chunk...)
+	if len(combined) > maxSSEBufferBytes {
+		combined = combined[len(combined)-maxSSEBufferBytes:]
+	}
+
+	// Common fast-path in this codebase: upstream/executor provides whole SSE lines
+	// without a trailing newline (handlers may write "\n" separately). If there's no
+	// newline in the buffered data, attempt to parse it as a single SSE line.
+	if bytes.IndexByte(combined, '\n') < 0 {
+		c, rest, updated := countSSEContentTokenEventsFromSingleLine(combined, updatedEventName)
+		// If we successfully consumed it (rest empty), avoid buffering indefinitely.
+		if len(rest) == 0 {
+			return c, nil, updated
+		}
+		return 0, combined, updatedEventName
+	}
+
+	for {
+		idx := bytes.IndexByte(combined, '\n')
+		if idx < 0 {
+			break
+		}
+		line := combined[:idx]
+		combined = combined[idx+1:]
+
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
 			continue
 		}
-		payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
-		out = append(out, payload)
+		// SSE comments / keep-alives.
+		if trimmed[0] == ':' {
+			continue
+		}
+		if bytes.Equal(trimmed, []byte(": keep-alive")) {
+			continue
+		}
+		if bytes.HasPrefix(trimmed, []byte("event:")) {
+			updatedEventName = strings.TrimSpace(string(bytes.TrimPrefix(trimmed, []byte("event:"))))
+			continue
+		}
+		if !bytes.HasPrefix(trimmed, []byte("data:")) {
+			continue
+		}
+
+		payload := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
+		if len(payload) == 0 {
+			continue
+		}
+		if bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		if jsonHasContentToken(payload) {
+			count++
+			continue
+		}
+		// Non-JSON data payload; treat as content.
+		if payload[0] != '{' && payload[0] != '[' {
+			count++
+			continue
+		}
+		// If `event:` carries the semantic type and `data:` omits it, fall back to the last seen event name.
+		if strings.TrimSpace(updatedEventName) != "" && sseEventHasContentToken(updatedEventName, payload) {
+			count++
+			continue
+		}
 	}
-	return out
+
+	return count, combined, updatedEventName
+}
+
+func countSSEContentTokenEventsFromSingleLine(line []byte, lastEventName string) (count int, rest []byte, updatedEventName string) {
+	updatedEventName = lastEventName
+	trimmed := bytes.TrimSpace(bytes.TrimSuffix(line, []byte("\r")))
+	if len(trimmed) == 0 {
+		return 0, nil, updatedEventName
+	}
+	// Comments / keep-alives.
+	if trimmed[0] == ':' {
+		return 0, nil, updatedEventName
+	}
+	if bytes.Equal(trimmed, []byte(": keep-alive")) {
+		return 0, nil, updatedEventName
+	}
+	if bytes.HasPrefix(trimmed, []byte("event:")) {
+		updatedEventName = strings.TrimSpace(string(bytes.TrimPrefix(trimmed, []byte("event:"))))
+		return 0, nil, updatedEventName
+	}
+	if !bytes.HasPrefix(trimmed, []byte("data:")) {
+		// Not an SSE data line; keep buffering.
+		return 0, line, updatedEventName
+	}
+
+	payload := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
+	if len(payload) == 0 {
+		return 0, nil, updatedEventName
+	}
+	if bytes.Equal(payload, []byte("[DONE]")) {
+		return 0, nil, updatedEventName
+	}
+	if jsonHasContentToken(payload) {
+		return 1, nil, updatedEventName
+	}
+	// Non-JSON payload: treat as content.
+	if payload[0] != '{' && payload[0] != '[' {
+		return 1, nil, updatedEventName
+	}
+	if strings.TrimSpace(updatedEventName) != "" && sseEventHasContentToken(updatedEventName, payload) {
+		return 1, nil, updatedEventName
+	}
+
+	// Valid JSON but doesn't look like a content token event.
+	if gjson.ValidBytes(payload) {
+		return 0, nil, updatedEventName
+	}
+	// JSON is incomplete -> buffer.
+	return 0, line, updatedEventName
+}
+
+func sseEventHasContentToken(eventName string, payload []byte) bool {
+	p := bytes.TrimSpace(payload)
+	if len(p) == 0 {
+		return false
+	}
+	if bytes.Equal(p, []byte("[DONE]")) {
+		return false
+	}
+
+	// First, try the existing JSON-based detectors.
+	if jsonHasContentToken(p) {
+		return true
+	}
+
+	// Non-JSON data payload; treat as content.
+	if p[0] != '{' && p[0] != '[' {
+		return true
+	}
+
+	// If the event name carries the type and the payload omits it (common for Responses SSE),
+	// interpret a minimal payload for known user-visible events.
+	en := strings.TrimSpace(eventName)
+	if en == "" {
+		return false
+	}
+	root := gjson.ParseBytes(p)
+	if !root.Exists() {
+		return false
+	}
+
+	switch en {
+	case "response.output_text.delta":
+		if d := root.Get("delta"); d.Type == gjson.String && strings.TrimSpace(d.String()) != "" {
+			return true
+		}
+	case "response.output_text.done":
+		if txt := root.Get("text"); txt.Type == gjson.String && strings.TrimSpace(txt.String()) != "" {
+			return true
+		}
+	case "response.content_part.added", "response.content_part.done":
+		if strings.TrimSpace(root.Get("part.type").String()) == "output_text" {
+			if txt := root.Get("part.text"); txt.Type == gjson.String && strings.TrimSpace(txt.String()) != "" {
+				return true
+			}
+		}
+	case "response.output_item.added", "response.output_item.done":
+		if strings.TrimSpace(root.Get("item.type").String()) == "message" {
+			contentArr := root.Get("item.content")
+			if contentArr.Exists() && contentArr.IsArray() {
+				has := false
+				contentArr.ForEach(func(_, block gjson.Result) bool {
+					bt := strings.TrimSpace(block.Get("type").String())
+					if bt != "output_text" && bt != "text" {
+						return true
+					}
+					if t := block.Get("text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+						has = true
+						return false
+					}
+					return true
+				})
+				if has {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 func jsonHasContentToken(payload []byte) bool {
@@ -444,6 +705,37 @@ func jsonHasContentToken(payload []byte) bool {
 	if typ := strings.TrimSpace(root.Get("type").String()); typ == "response.output_text.done" {
 		if txt := root.Get("text"); txt.Type == gjson.String && strings.TrimSpace(txt.String()) != "" {
 			return true
+		}
+	}
+	// OpenAI Responses content parts: response.content_part.added/done for output_text.
+	if typ := strings.TrimSpace(root.Get("type").String()); typ == "response.content_part.added" || typ == "response.content_part.done" {
+		if strings.TrimSpace(root.Get("part.type").String()) == "output_text" {
+			if txt := root.Get("part.text"); txt.Type == gjson.String && strings.TrimSpace(txt.String()) != "" {
+				return true
+			}
+		}
+	}
+	// OpenAI Responses items: response.output_item.added/done; message items carry content blocks.
+	if typ := strings.TrimSpace(root.Get("type").String()); typ == "response.output_item.added" || typ == "response.output_item.done" {
+		if strings.TrimSpace(root.Get("item.type").String()) == "message" {
+			contentArr := root.Get("item.content")
+			if contentArr.Exists() && contentArr.IsArray() {
+				has := false
+				contentArr.ForEach(func(_, block gjson.Result) bool {
+					bt := strings.TrimSpace(block.Get("type").String())
+					if bt != "output_text" && bt != "text" {
+						return true
+					}
+					if t := block.Get("text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
+						has = true
+						return false
+					}
+					return true
+				})
+				if has {
+					return true
+				}
+			}
 		}
 	}
 
@@ -482,6 +774,35 @@ func jsonHasContentToken(payload []byte) bool {
 	// Anthropic streaming: delta.text or content_block.text
 	if t := root.Get("delta.text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
 		return true
+	}
+	// Scheme B: treat non-user-visible deltas (thinking/tool-related) as content too, so TTFT
+	// is stable for tool/thinking-heavy models (e.g. kimi-for-coding).
+	if typ := strings.TrimSpace(root.Get("type").String()); typ == "content_block_delta" {
+		dt := strings.TrimSpace(root.Get("delta.type").String())
+		// Known thinking delta shape: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"..."}}
+		if dt == "thinking_delta" {
+			if th := root.Get("delta.thinking"); th.Type == gjson.String && strings.TrimSpace(th.String()) != "" {
+				return true
+			}
+		}
+		// Generic fallback for future delta types: if the delta object contains any non-empty string
+		// field (excluding the discriminator "type"), count it as generated content.
+		if d := root.Get("delta"); d.Exists() {
+			has := false
+			d.ForEach(func(k, v gjson.Result) bool {
+				if strings.TrimSpace(k.String()) == "type" {
+					return true
+				}
+				if v.Type == gjson.String && strings.TrimSpace(v.String()) != "" {
+					has = true
+					return false
+				}
+				return true
+			})
+			if has {
+				return true
+			}
+		}
 	}
 	// Anthropic tool streaming: tool_use args arrive as input_json_delta.
 	// Treat non-empty partial_json as generated output so we can compute TTFT/TPS/TPOT

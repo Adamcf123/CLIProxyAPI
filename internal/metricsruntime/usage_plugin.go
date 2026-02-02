@@ -2,6 +2,7 @@ package metricsruntime
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,6 +28,9 @@ const (
 // metrics (TPS, TTFT, TPOT) and persist them to SQLite.
 type MetricsPlugin struct {
 	collector *metrics.TPSCollector
+
+	errorsMu    sync.Mutex
+	errorsTotal map[metrics.MetricKey]int
 }
 
 // NewMetricsPlugin creates a new MetricsPlugin that writes to the provided collector.
@@ -34,7 +38,10 @@ func NewMetricsPlugin(collector *metrics.TPSCollector) *MetricsPlugin {
 	if collector == nil {
 		collector = metrics.NewCollector(nil)
 	}
-	return &MetricsPlugin{collector: collector}
+	return &MetricsPlugin{
+		collector:   collector,
+		errorsTotal: make(map[metrics.MetricKey]int),
+	}
 }
 
 // HandleUsage implements usage.Plugin.
@@ -92,11 +99,15 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	var state *RequestState
 	var snap RequestStateSnapshot
 	isCanceled := false
+	var key metrics.MetricKey
+	hasKey := false
 	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
 		state, _ = GetRequestState(ginCtx)
 		if state != nil {
 			snap = state.Snapshot()
 			isCanceled = snap.IsClientCanceled()
+			key = metrics.MetricKey{Provider: record.Provider, Model: record.Model, Streaming: snap.Streaming}
+			hasKey = true
 			// Prefer state tracking ID if available.
 			if snap.TrackingID != "" {
 				trackingID = snap.TrackingID
@@ -158,12 +169,6 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	// Compute TPS/TPOT when we have output tokens and sufficient timing data.
 	// Note: even when TPS/TPOT are suppressed for confidence reasons, TTFT is still logged above.
 	if outputTokens > 0 && state != nil && !isCanceled {
-		key := metrics.MetricKey{
-			Provider:  record.Provider,
-			Model:     record.Model,
-			Streaming: snap.Streaming,
-		}
-
 		// Build RequestMetrics for calculation.
 		m := &metrics.RequestMetrics{
 			TrackingID: trackingID,
@@ -209,6 +214,13 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		}
 	}
 
+	// Add sliding window stats for the current provider/model/streaming key.
+	if state != nil && hasKey {
+		ws, ok := p.collector.GetWindowStats(key)
+		state.SetWindowStats(windowStatsFromCollector(ws, ok))
+		state.SetErrorsTotal(p.updateErrorsTotal(key, snap))
+	}
+
 	// Calculate duration if we have start time.
 	if state != nil && !state.StartedAt.IsZero() {
 		duration := now.Sub(state.StartedAt).Milliseconds()
@@ -234,6 +246,41 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 			ErrorInfo:    errorInfoPtr,
 		})
 	}
+}
+
+func windowStatsFromCollector(stats metrics.WindowStats, ok bool) RequestWindowStats {
+	if !ok || stats.Count <= 0 {
+		return RequestWindowStats{Count: 0}
+	}
+	// WindowStats uses concrete float64 fields; metrics_summary uses pointers so an empty
+	// window can express avg=null instead of 0.
+	tps := stats.TPSAvg
+	ttft := stats.TTFTAvg
+	tpot := stats.TPOTAvg
+	return RequestWindowStats{
+		Count:   stats.Count,
+		TPSAvg:  &tps,
+		TTFTAvg: &ttft,
+		TPOTAvg: &tpot,
+	}
+}
+
+func (p *MetricsPlugin) updateErrorsTotal(key metrics.MetricKey, snap RequestStateSnapshot) int {
+	if p == nil {
+		return 0
+	}
+	p.errorsMu.Lock()
+	defer p.errorsMu.Unlock()
+	if p.errorsTotal == nil {
+		p.errorsTotal = make(map[metrics.MetricKey]int)
+	}
+
+	total := p.errorsTotal[key]
+	if snap.IsFailure() && !snap.IsClientCanceled() {
+		total++
+		p.errorsTotal[key] = total
+	}
+	return total
 }
 
 func shouldComputeRates(snap RequestStateSnapshot, outputTokens int64, end time.Time) bool {
