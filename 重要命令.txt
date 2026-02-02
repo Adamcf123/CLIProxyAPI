@@ -81,17 +81,80 @@ curl -sS \
 
 
 # Phase 02 指标输出（仅当 stderr 为 TTY 时显示流式进度行；非 TTY 仅在结束时输出单行 metrics_summary JSON）
+# 可在 config.yaml 中配置全局禁用 TTY 下的实时 progress 覆盖行：metrics-progress-disabled: true
 # 可通过环境变量强制禁用实时 progress 覆盖行（即使 stderr 为 TTY）：CLIPROXY_METRICS_PROGRESS_DISABLED=1
 # 示例：CLIPROXY_METRICS_PROGRESS_DISABLED=1 ./cli-proxy-api
 # 注意：该 env 只影响实时 progress，不影响请求结束的单行 metrics_summary JSON
 # Phase 03 持久化：写入 logs/metrics.db（SQLite）
 sqlite3 "logs/metrics.db" "SELECT request_id, provider, model, tps, ttft, tpot, created_at FROM metrics ORDER BY created_at DESC LIMIT 5;"
 
+# metrics.db 基本分布（用于确认 provider/model/streaming 的实际取值）
+sqlite3 -header -column logs/metrics.db "SELECT provider, COUNT(*) AS n FROM metrics GROUP BY provider ORDER BY n DESC;"
+sqlite3 -header -column logs/metrics.db "SELECT model, COUNT(*) AS n FROM metrics GROUP BY model ORDER BY n DESC;"
+sqlite3 -header -column logs/metrics.db "SELECT streaming, COUNT(*) AS n FROM metrics GROUP BY streaming ORDER BY n DESC;"
+
+# 近 N 分钟窗口汇总（直接查 SQLite；按需替换 provider/model）
+# 说明：tps/tpot/ttft 可能为 NULL；请同时看 *_sample_count 以避免误读。
+sqlite3 -header -column logs/metrics.db "
+WITH base AS (
+  SELECT *
+  FROM metrics
+  WHERE created_at >= datetime('now','-10 minutes')
+    AND created_at <  datetime('now')
+    AND provider = 'claude'
+    AND model = 'kimi-for-coding'
+    AND streaming = 1
+)
+SELECT
+  COUNT(*) AS total_requests,
+  SUM(CASE WHEN status_code = 499 THEN 1 ELSE 0 END) AS canceled_requests,
+  SUM(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN 1 ELSE 0 END) AS success_requests,
+  SUM(CASE WHEN status_code = 499 THEN 0 WHEN status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN 0 ELSE 1 END) AS failure_requests,
+  COUNT(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') AND tps IS NOT NULL THEN 1 END) AS tps_samples_success,
+  AVG(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') THEN tps END) AS tps_avg_success,
+  COUNT(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') AND output_tokens IS NOT NULL AND duration_ms IS NOT NULL AND duration_ms > 0 THEN 1 END) AS tps_e2e_samples_success,
+  AVG(CASE WHEN status_code != 499 AND status_code >= 200 AND status_code < 300 AND (error_info IS NULL OR error_info = '') AND output_tokens IS NOT NULL AND duration_ms IS NOT NULL AND duration_ms > 0 THEN (CAST(output_tokens AS REAL) / (CAST(duration_ms AS REAL) / 1000.0)) END) AS tps_e2e_avg_success
+FROM base;"
+
+# output_tokens 很多但 TTFT 仍为 NULL（用于排查 streaming 首内容识别）
+sqlite3 -header -column logs/metrics.db "
+SELECT request_id, provider, model, output_tokens, duration_ms, ttft, tps, tpot, created_at
+FROM metrics
+WHERE streaming=1
+  AND output_tokens IS NOT NULL AND output_tokens >= 16
+  AND ttft IS NULL
+ORDER BY created_at DESC
+LIMIT 30;"
+
 # 历史指标查询：GET /v0/management/metrics（从 logs/metrics.db 读取）
 curl -sS \
   -H "X-Management-Key: ${MANAGEMENT_KEY}" \
   "http://127.0.0.1:53355/v0/management/metrics?mode=percentiles" \
   | jq '.'
+
+# 历史指标查询：buckets（按时间窗口）
+# 示例：近 10 分钟，每分钟一个 bucket（可替换 bucket=5m/15m/1h；并可加 provider/model/streaming 过滤）
+TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+FROM=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/metrics?mode=buckets&bucket=1m&from=${FROM}&to=${TO}&provider=claude&model=kimi-for-coding&streaming=true" \
+  | jq '.'
+
+# buckets 输出做窗口内加权平均（避免大量 NULL 时误读）
+curl -sS \
+  -H "X-Management-Key: ${MANAGEMENT_KEY}" \
+  "http://127.0.0.1:53355/v0/management/metrics?mode=buckets&bucket=1m&from=${FROM}&to=${TO}&provider=claude&model=kimi-for-coding&streaming=true" \
+  | jq '(.success[0].buckets) as $b
+        | {
+            total_requests: ([ $b[] | .count ] | add // 0),
+            tps_sample_count: ([ $b[] | .metrics.tps_sample_count ] | add // 0),
+            tps_avg_weighted: (([ $b[] | select(.metrics.tps_avg != null) | (.metrics.tps_avg * .metrics.tps_sample_count) ] | add // 0)
+                              / (([ $b[] | .metrics.tps_sample_count ] | add // 0) | if .==0 then 1 else . end)),
+            tps_e2e_sample_count: ([ $b[] | .metrics.tps_e2e_sample_count ] | add // 0),
+            tps_e2e_avg_weighted: (([ $b[] | select(.metrics.tps_e2e_avg != null) | (.metrics.tps_e2e_avg * .metrics.tps_e2e_sample_count) ] | add // 0)
+                                  / (([ $b[] | .metrics.tps_e2e_sample_count ] | add // 0) | if .==0 then 1 else . end))
+          }'
 
 
 # OpenAI 兼容：Chat Completions（流式）
