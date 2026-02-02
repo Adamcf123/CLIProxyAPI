@@ -6,12 +6,26 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	isatty "github.com/mattn/go-isatty"
 )
 
 const EnvMetricsProgressDisabled = "CLIPROXY_METRICS_PROGRESS_DISABLED"
+
+var configProgressDisabled atomic.Bool
+
+// SetProgressDisabled updates the process-wide live progress display toggle.
+// When true, PrintProgress will not emit overwrite progress lines.
+// This does not change metrics_summary output.
+func SetProgressDisabled(disabled bool) {
+	configProgressDisabled.Store(disabled)
+}
+
+func ProgressDisabled() bool {
+	return configProgressDisabled.Load()
+}
 
 type liveDisplay struct {
 	state *RequestState
@@ -74,6 +88,9 @@ func PrintProgress(state *RequestState, isTTY bool) {
 	if !isTTY {
 		return
 	}
+	if ProgressDisabled() {
+		return
+	}
 	if envBoolTrue(EnvMetricsProgressDisabled) {
 		return
 	}
@@ -127,18 +144,20 @@ func envBoolTrue(name string) bool {
 }
 
 type summaryLine struct {
-	TrackingID   string   `json:"tracking_id"`
-	Provider     string   `json:"provider"`
-	Model        string   `json:"model"`
-	TPS          *float64 `json:"tps"`
-	TTFT         *float64 `json:"ttft"`
-	TPOT         *float64 `json:"tpot"`
-	InputTokens  *int     `json:"input_tokens"`
-	OutputTokens *int     `json:"output_tokens"`
-	DurationMs   int64    `json:"duration_ms"`
-	StatusCode   *int     `json:"status_code"`
-	RequestPath  string   `json:"request_path"`
-	UsageNote    string   `json:"usage_note"`
+	TrackingID   string             `json:"tracking_id"`
+	Provider     string             `json:"provider"`
+	Model        string             `json:"model"`
+	WindowStats  RequestWindowStats `json:"window_stats"`
+	ErrorsTotal  int                `json:"errors_total"`
+	TPS          *float64           `json:"tps"`
+	TTFT         *float64           `json:"ttft"`
+	TPOT         *float64           `json:"tpot"`
+	InputTokens  *int               `json:"input_tokens"`
+	OutputTokens *int               `json:"output_tokens"`
+	DurationMs   int64              `json:"duration_ms"`
+	StatusCode   *int               `json:"status_code"`
+	RequestPath  string             `json:"request_path"`
+	UsageNote    string             `json:"usage_note"`
 }
 
 func PrintSummary(state *RequestState) {
@@ -197,6 +216,8 @@ func PrintSummary(state *RequestState) {
 		TrackingID:   snap.TrackingID,
 		Provider:     snap.Provider,
 		Model:        snap.Model,
+		WindowStats:  snap.WindowStats,
+		ErrorsTotal:  snap.ErrorsTotal,
 		TPS:          tpsPtr,
 		TTFT:         ttftPtr,
 		TPOT:         tpotPtr,
