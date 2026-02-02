@@ -131,6 +131,9 @@ type metricsBucketsMetrics struct {
 	TPSAvg         *float64 `json:"tps_avg"`
 	TPSSampleCount int      `json:"tps_sample_count"`
 
+	TPSE2EAvg         *float64 `json:"tps_e2e_avg"`
+	TPSE2ESampleCount int      `json:"tps_e2e_sample_count"`
+
 	TTFTMillisAvg         *int64 `json:"ttft_ms_avg"`
 	TTFTMillisSampleCount int    `json:"ttft_ms_sample_count"`
 
@@ -607,7 +610,9 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		"SUM(CASE WHEN ttft IS NOT NULL THEN 1 ELSE 0 END) AS ttft_sample_count, " +
 		"SUM(CASE WHEN tpot IS NOT NULL THEN 1 ELSE 0 END) AS tpot_sample_count, " +
 		"SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END) AS duration_ms_sample_count, " +
+		"SUM(CASE WHEN output_tokens IS NOT NULL AND duration_ms IS NOT NULL AND duration_ms > 0 THEN 1 ELSE 0 END) AS tps_e2e_sample_count, " +
 		"AVG(tps) AS tps_avg, " +
+		"AVG(CASE WHEN output_tokens IS NOT NULL AND duration_ms IS NOT NULL AND duration_ms > 0 THEN (CAST(output_tokens AS REAL) / (CAST(duration_ms AS REAL) / 1000.0)) END) AS tps_e2e_avg, " +
 		"AVG(ttft) AS ttft_avg, " +
 		"AVG(tpot) AS tpot_avg, " +
 		"AVG(duration_ms) AS duration_ms_avg " +
@@ -666,7 +671,9 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 			ttftSample    int64
 			tpotSample    int64
 			durMSSample   int64
+			tpsE2ESample  int64
 			tpsAvg        sql.NullFloat64
+			tpsE2EAvg     sql.NullFloat64
 			ttftAvg       sql.NullFloat64
 			tpotAvg       sql.NullFloat64
 			durationMSAvg sql.NullFloat64
@@ -682,7 +689,9 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 			&ttftSample,
 			&tpotSample,
 			&durMSSample,
+			&tpsE2ESample,
 			&tpsAvg,
+			&tpsE2EAvg,
 			&ttftAvg,
 			&tpotAvg,
 			&durationMSAvg,
@@ -703,6 +712,7 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 
 		metricsOut := metricsBucketsMetrics{
 			TPSSampleCount:        int(tpsSample),
+			TPSE2ESampleCount:     int(tpsE2ESample),
 			TTFTMillisSampleCount: int(ttftSample),
 			TPOTMillisSampleCount: int(tpotSample),
 			DurationMSSampleCount: int(durMSSample),
@@ -710,6 +720,10 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		if tpsAvg.Valid {
 			v := tpsAvg.Float64
 			metricsOut.TPSAvg = &v
+		}
+		if tpsE2EAvg.Valid {
+			v := tpsE2EAvg.Float64
+			metricsOut.TPSE2EAvg = &v
 		}
 		if ttftAvg.Valid {
 			ms := secondsToMillisInt(ttftAvg.Float64)
