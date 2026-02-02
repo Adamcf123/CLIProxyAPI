@@ -51,7 +51,8 @@ func pickRequestJSON(originalRequestRawJSON, requestRawJSON []byte) []byte {
 }
 
 func emitEvent(event string, payload string) string {
-	return fmt.Sprintf("event: %s\ndata: %s", event, payload)
+	// SSE event frames must end with a blank line.
+	return fmt.Sprintf("event: %s\ndata: %s\n\n", event, payload)
 }
 
 // ConvertClaudeResponseToOpenAIResponses converts Claude SSE to OpenAI Responses SSE events.
