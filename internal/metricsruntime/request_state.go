@@ -31,6 +31,9 @@ type RequestState struct {
 	// FirstContentTokenAt records when the first user-visible content token is observed
 	// in a streaming response (not merely a metadata/role chunk or keep-alive).
 	FirstContentTokenAt *time.Time
+	// LastContentTokenAt records when the most recent user-visible content token is observed.
+	// This is used to compute streaming TPS/TPOT using the observed content output window.
+	LastContentTokenAt *time.Time
 	// ContentTokenChunks counts how many chunks contained user-visible content.
 	// This is used as a confidence signal for TPS/TPOT on streaming responses.
 	ContentTokenChunks int
@@ -55,6 +58,7 @@ type RequestStateSnapshot struct {
 	TrackingID          string
 	StartedAt           time.Time
 	FirstContentTokenAt *time.Time
+	LastContentTokenAt  *time.Time
 	ContentTokenChunks  int
 	Streaming           bool
 	RequestedModel      string
@@ -113,6 +117,10 @@ func (s *RequestState) Snapshot() RequestStateSnapshot {
 	if s.FirstContentTokenAt != nil {
 		t := *s.FirstContentTokenAt
 		snap.FirstContentTokenAt = &t
+	}
+	if s.LastContentTokenAt != nil {
+		t := *s.LastContentTokenAt
+		snap.LastContentTokenAt = &t
 	}
 	if s.InputTokens != nil {
 		v := *s.InputTokens
@@ -319,36 +327,41 @@ func MaybeRecordFirstContentToken(c *gin.Context, chunk []byte, now time.Time) {
 	if now.IsZero() {
 		return
 	}
-	if !chunkHasContentToken(chunk) {
+	contentEvents := countContentTokenEvents(chunk)
+	if contentEvents <= 0 {
 		return
 	}
 	state.mu.Lock()
-	state.ContentTokenChunks++
+	state.ContentTokenChunks += contentEvents
+	// Always keep the latest observed content token timestamp for rate calculations.
+	t := now
+	state.LastContentTokenAt = &t
 	state.mu.Unlock()
 
 	state.firstTokenOnce.Do(func() {
-		t := now
+		first := now
 		state.mu.Lock()
-		state.FirstContentTokenAt = &t
+		state.FirstContentTokenAt = &first
 		state.mu.Unlock()
 	})
 }
 
-func chunkHasContentToken(chunk []byte) bool {
+func countContentTokenEvents(chunk []byte) int {
 	trimmed := bytes.TrimSpace(chunk)
 	if len(trimmed) == 0 {
-		return false
+		return 0
 	}
 	// Filter SSE comment heartbeats / keep-alives (": ...").
 	if len(trimmed) > 0 && trimmed[0] == ':' {
-		return false
+		return 0
 	}
 	if bytes.Equal(trimmed, []byte(": keep-alive")) {
-		return false
+		return 0
 	}
 
 	// SSE: parse data: lines and inspect payload.
 	if looksLikeSSE(trimmed) {
+		count := 0
 		for _, payload := range extractSSEDataPayloads(trimmed) {
 			p := bytes.TrimSpace(payload)
 			if len(p) == 0 {
@@ -358,17 +371,22 @@ func chunkHasContentToken(chunk []byte) bool {
 				continue
 			}
 			if jsonHasContentToken(p) {
-				return true
+				count++
+				continue
 			}
 			// Non-JSON data payload; treat as content.
 			if p[0] != '{' && p[0] != '[' {
-				return true
+				count++
+				continue
 			}
 		}
-		return false
+		return count
 	}
 
-	return jsonHasContentToken(trimmed)
+	if jsonHasContentToken(trimmed) {
+		return 1
+	}
+	return 0
 }
 
 func looksLikeSSE(b []byte) bool {
@@ -415,6 +433,20 @@ func jsonHasContentToken(payload []byte) bool {
 		return false
 	}
 
+	// OpenAI Responses streaming: response.output_text.delta with string delta.
+	// Example: {"type":"response.output_text.delta","delta":"hello"}
+	if typ := strings.TrimSpace(root.Get("type").String()); typ == "response.output_text.delta" {
+		if d := root.Get("delta"); d.Type == gjson.String && strings.TrimSpace(d.String()) != "" {
+			return true
+		}
+	}
+	// Some implementations may emit a done event carrying the final text.
+	if typ := strings.TrimSpace(root.Get("type").String()); typ == "response.output_text.done" {
+		if txt := root.Get("text"); txt.Type == gjson.String && strings.TrimSpace(txt.String()) != "" {
+			return true
+		}
+	}
+
 	// OpenAI streaming: choices[].delta.content or choices[].text
 	choices := root.Get("choices")
 	if choices.Exists() && choices.IsArray() {
@@ -450,6 +482,16 @@ func jsonHasContentToken(payload []byte) bool {
 	// Anthropic streaming: delta.text or content_block.text
 	if t := root.Get("delta.text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
 		return true
+	}
+	// Anthropic tool streaming: tool_use args arrive as input_json_delta.
+	// Treat non-empty partial_json as generated output so we can compute TTFT/TPS/TPOT
+	// for tool-heavy models (e.g. kimi-for-coding).
+	if typ := strings.TrimSpace(root.Get("type").String()); typ == "content_block_delta" {
+		if dt := strings.TrimSpace(root.Get("delta.type").String()); dt == "input_json_delta" {
+			if pj := root.Get("delta.partial_json"); pj.Type == gjson.String && strings.TrimSpace(pj.String()) != "" {
+				return true
+			}
+		}
 	}
 	if t := root.Get("content_block.text"); t.Type == gjson.String && strings.TrimSpace(t.String()) != "" {
 		return true
