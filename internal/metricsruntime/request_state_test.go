@@ -77,6 +77,73 @@ func TestMaybeRecordFirstContentToken_ClaudeSSE(t *testing.T) {
 	}
 }
 
+func TestMaybeRecordFirstContentToken_ClaudeToolInputJSONDeltaCountsAsContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	state := NewRequestState(true, "kimi-for-coding")
+	AttachRequestState(c, state)
+
+	toolArgsDelta := []byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"x\\\":1\"}}\n\n")
+	MaybeRecordFirstContentToken(c, toolArgsDelta, time.Unix(500, 0))
+
+	snap := state.Snapshot()
+	if snap.FirstContentTokenAt == nil {
+		t.Fatalf("expected FirstContentTokenAt to be set for input_json_delta")
+	}
+	if snap.ContentTokenChunks != 1 {
+		t.Fatalf("expected ContentTokenChunks=1, got %d", snap.ContentTokenChunks)
+	}
+}
+
+func TestMaybeRecordFirstContentToken_OpenAIResponsesOutputTextDelta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	state := NewRequestState(true, "gpt-5.2")
+	AttachRequestState(c, state)
+
+	chunk := []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n")
+	want := time.Unix(300, 0)
+	MaybeRecordFirstContentToken(c, chunk, want)
+
+	snap := state.Snapshot()
+	if snap.FirstContentTokenAt == nil {
+		t.Fatalf("expected FirstContentTokenAt to be set")
+	}
+	if !snap.FirstContentTokenAt.Equal(want) {
+		t.Fatalf("expected FirstContentTokenAt=%v, got %v", want, *snap.FirstContentTokenAt)
+	}
+	if snap.LastContentTokenAt == nil {
+		t.Fatalf("expected LastContentTokenAt to be set")
+	}
+	if !snap.LastContentTokenAt.Equal(want) {
+		t.Fatalf("expected LastContentTokenAt=%v, got %v", want, *snap.LastContentTokenAt)
+	}
+	if snap.ContentTokenChunks != 1 {
+		t.Fatalf("expected ContentTokenChunks=1, got %d", snap.ContentTokenChunks)
+	}
+}
+
+func TestMaybeRecordFirstContentToken_MultipleEventsInOneChunkCountsBoth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	state := NewRequestState(true, "gpt-5.2")
+	AttachRequestState(c, state)
+
+	chunk := []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}\n\n")
+	MaybeRecordFirstContentToken(c, chunk, time.Unix(400, 0))
+
+	if snap := state.Snapshot(); snap.ContentTokenChunks != 2 {
+		t.Fatalf("expected ContentTokenChunks=2 for two content events in one chunk, got %d", snap.ContentTokenChunks)
+	}
+}
+
 func TestPrintSummary_TTFTFallbackWithoutMetrics(t *testing.T) {
 	state := NewRequestState(true, "gpt-5.2")
 	state.SetProvider("openai")
