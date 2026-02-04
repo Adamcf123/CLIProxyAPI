@@ -82,6 +82,9 @@ func TestPrintProgress(t *testing.T) {
 		if _, ok := m["window_stats"].(map[string]any); !ok {
 			t.Fatalf("expected window_stats object in metrics_summary, got %T", m["window_stats"])
 		}
+		if _, ok := m["window_stats_e2e"].(map[string]any); !ok {
+			t.Fatalf("expected window_stats_e2e object in metrics_summary, got %T", m["window_stats_e2e"])
+		}
 		if _, ok := m["errors_total"].(float64); !ok {
 			t.Fatalf("expected errors_total number in metrics_summary, got %T", m["errors_total"])
 		}
@@ -143,6 +146,9 @@ func TestPrintProgress(t *testing.T) {
 		if _, ok := m["window_stats"].(map[string]any); !ok {
 			t.Fatalf("expected window_stats object in metrics_summary, got %T", m["window_stats"])
 		}
+		if _, ok := m["window_stats_e2e"].(map[string]any); !ok {
+			t.Fatalf("expected window_stats_e2e object in metrics_summary, got %T", m["window_stats_e2e"])
+		}
 		if _, ok := m["errors_total"].(float64); !ok {
 			t.Fatalf("expected errors_total number in metrics_summary, got %T", m["errors_total"])
 		}
@@ -172,8 +178,17 @@ func TestPrintSummary_WindowStats_EncodesNullsAndNumbers(t *testing.T) {
 		if got, ok := ws["count"].(float64); !ok || got != 0 {
 			t.Fatalf("expected window_stats.count=0, got %v (%T)", ws["count"], ws["count"])
 		}
-		if ws["tps_avg"] != nil || ws["ttft_avg"] != nil || ws["tpot_avg"] != nil {
-			t.Fatalf("expected window_stats avg fields to be null for empty window, got tps_avg=%v ttft_avg=%v tpot_avg=%v", ws["tps_avg"], ws["ttft_avg"], ws["tpot_avg"])
+		if got, ok := ws["tps_gen_sample_count"].(float64); !ok || got != 0 {
+			t.Fatalf("expected window_stats.tps_gen_sample_count=0, got %v (%T)", ws["tps_gen_sample_count"], ws["tps_gen_sample_count"])
+		}
+		if got, ok := ws["ttft_sample_count"].(float64); !ok || got != 0 {
+			t.Fatalf("expected window_stats.ttft_sample_count=0, got %v (%T)", ws["ttft_sample_count"], ws["ttft_sample_count"])
+		}
+		if got, ok := ws["tpot_sample_count"].(float64); !ok || got != 0 {
+			t.Fatalf("expected window_stats.tpot_sample_count=0, got %v (%T)", ws["tpot_sample_count"], ws["tpot_sample_count"])
+		}
+		if ws["tps_gen_avg"] != nil || ws["ttft_avg"] != nil || ws["tpot_avg"] != nil {
+			t.Fatalf("expected window_stats avg fields to be null for empty window, got tps_gen_avg=%v ttft_avg=%v tpot_avg=%v", ws["tps_gen_avg"], ws["ttft_avg"], ws["tpot_avg"])
 		}
 	})
 
@@ -183,7 +198,15 @@ func TestPrintSummary_WindowStats_EncodesNullsAndNumbers(t *testing.T) {
 			tps := 12.34
 			ttft := 0.56
 			tpot := 0.078
-			state.SetWindowStats(RequestWindowStats{Count: 3, TPSAvg: &tps, TTFTAvg: &ttft, TPOTAvg: &tpot})
+			state.SetWindowStats(RequestWindowStats{
+				Count:           3,
+				TPSAvg:          &tps,
+				TTFTAvg:         &ttft,
+				TPOTAvg:         &tpot,
+				TPSSampleCount:  3,
+				TTFTSampleCount: 3,
+				TPOTSampleCount: 3,
+			})
 			PrintSummary(state)
 		})
 
@@ -203,8 +226,17 @@ func TestPrintSummary_WindowStats_EncodesNullsAndNumbers(t *testing.T) {
 		if got, ok := ws["count"].(float64); !ok || got < 1 {
 			t.Fatalf("expected window_stats.count>=1, got %v (%T)", ws["count"], ws["count"])
 		}
-		if _, ok := ws["tps_avg"].(float64); !ok {
-			t.Fatalf("expected window_stats.tps_avg number, got %v (%T)", ws["tps_avg"], ws["tps_avg"])
+		if got, ok := ws["tps_gen_sample_count"].(float64); !ok || got != ws["count"].(float64) {
+			t.Fatalf("expected window_stats.tps_gen_sample_count=count, got %v (%T) count=%v", ws["tps_gen_sample_count"], ws["tps_gen_sample_count"], ws["count"])
+		}
+		if got, ok := ws["ttft_sample_count"].(float64); !ok || got != ws["count"].(float64) {
+			t.Fatalf("expected window_stats.ttft_sample_count=count, got %v (%T) count=%v", ws["ttft_sample_count"], ws["ttft_sample_count"], ws["count"])
+		}
+		if got, ok := ws["tpot_sample_count"].(float64); !ok || got != ws["count"].(float64) {
+			t.Fatalf("expected window_stats.tpot_sample_count=count, got %v (%T) count=%v", ws["tpot_sample_count"], ws["tpot_sample_count"], ws["count"])
+		}
+		if _, ok := ws["tps_gen_avg"].(float64); !ok {
+			t.Fatalf("expected window_stats.tps_gen_avg number, got %v (%T)", ws["tps_gen_avg"], ws["tps_gen_avg"])
 		}
 		if _, ok := ws["ttft_avg"].(float64); !ok {
 			t.Fatalf("expected window_stats.ttft_avg number, got %v (%T)", ws["ttft_avg"], ws["ttft_avg"])
