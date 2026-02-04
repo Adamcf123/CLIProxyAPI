@@ -49,11 +49,15 @@ type RequestState struct {
 	RequestPath string
 	StatusCode  int
 
-	InputTokens  *int
-	OutputTokens *int
-	Metrics      *metrics.RequestMetrics
-	WindowStats  RequestWindowStats
-	ErrorsTotal  int
+	InputTokens    *int
+	OutputTokens   *int
+	Metrics        *metrics.RequestMetrics
+	WindowStats    RequestWindowStats
+	WindowStatsE2E RequestWindowStatsE2E
+	ErrorsTotal    int
+
+	TPSE2E  *float64
+	TPOTE2E *float64
 
 	LastError string
 
@@ -72,10 +76,22 @@ type RequestState struct {
 // It represents per-provider/model/streaming sliding window averages.
 // Avg fields are nil when the window is empty.
 type RequestWindowStats struct {
-	Count   int      `json:"count"`
-	TPSAvg  *float64 `json:"tps_avg"`
-	TTFTAvg *float64 `json:"ttft_avg"`
-	TPOTAvg *float64 `json:"tpot_avg"`
+	Count           int      `json:"count"`
+	TPSAvg          *float64 `json:"tps_gen_avg"`
+	TTFTAvg         *float64 `json:"ttft_avg"`
+	TPOTAvg         *float64 `json:"tpot_avg"`
+	TPSSampleCount  int      `json:"tps_gen_sample_count"`
+	TTFTSampleCount int      `json:"ttft_sample_count"`
+	TPOTSampleCount int      `json:"tpot_sample_count"`
+}
+
+// RequestWindowStatsE2E is the metrics_summary.window_stats_e2e payload.
+// It represents end-to-end averages over a sliding window, computed from
+// output_tokens / total request duration.
+type RequestWindowStatsE2E struct {
+	Count      int      `json:"count"`
+	TPSE2EAvg  *float64 `json:"tps_e2e_avg"`
+	TPOTE2EAvg *float64 `json:"tpot_e2e_avg"`
 }
 
 type RequestStateSnapshot struct {
@@ -92,11 +108,15 @@ type RequestStateSnapshot struct {
 	RequestPath string
 	StatusCode  int
 
-	InputTokens  *int
-	OutputTokens *int
-	Metrics      *metrics.RequestMetrics
-	WindowStats  RequestWindowStats
-	ErrorsTotal  int
+	InputTokens    *int
+	OutputTokens   *int
+	Metrics        *metrics.RequestMetrics
+	WindowStats    RequestWindowStats
+	WindowStatsE2E RequestWindowStatsE2E
+	ErrorsTotal    int
+
+	TPSE2E  *float64
+	TPOTE2E *float64
 
 	LastError string
 }
@@ -143,6 +163,9 @@ func (s *RequestState) Snapshot() RequestStateSnapshot {
 	}
 	// window_stats uses nil pointers to express "no data" in metrics_summary JSON.
 	snap.WindowStats.Count = s.WindowStats.Count
+	snap.WindowStats.TPSSampleCount = s.WindowStats.TPSSampleCount
+	snap.WindowStats.TTFTSampleCount = s.WindowStats.TTFTSampleCount
+	snap.WindowStats.TPOTSampleCount = s.WindowStats.TPOTSampleCount
 	if s.WindowStats.TPSAvg != nil {
 		v := *s.WindowStats.TPSAvg
 		snap.WindowStats.TPSAvg = &v
@@ -154,6 +177,16 @@ func (s *RequestState) Snapshot() RequestStateSnapshot {
 	if s.WindowStats.TPOTAvg != nil {
 		v := *s.WindowStats.TPOTAvg
 		snap.WindowStats.TPOTAvg = &v
+	}
+	// window_stats_e2e uses nil pointers to express "no data" in metrics_summary JSON.
+	snap.WindowStatsE2E.Count = s.WindowStatsE2E.Count
+	if s.WindowStatsE2E.TPSE2EAvg != nil {
+		v := *s.WindowStatsE2E.TPSE2EAvg
+		snap.WindowStatsE2E.TPSE2EAvg = &v
+	}
+	if s.WindowStatsE2E.TPOTE2EAvg != nil {
+		v := *s.WindowStatsE2E.TPOTE2EAvg
+		snap.WindowStatsE2E.TPOTE2EAvg = &v
 	}
 	if s.FirstContentTokenAt != nil {
 		t := *s.FirstContentTokenAt
@@ -175,6 +208,14 @@ func (s *RequestState) Snapshot() RequestStateSnapshot {
 		m := *s.Metrics
 		snap.Metrics = &m
 	}
+	if s.TPSE2E != nil {
+		v := *s.TPSE2E
+		snap.TPSE2E = &v
+	}
+	if s.TPOTE2E != nil {
+		v := *s.TPOTE2E
+		snap.TPOTE2E = &v
+	}
 	return snap
 }
 
@@ -184,6 +225,9 @@ func (s *RequestState) SetWindowStats(stats RequestWindowStats) {
 	}
 	s.mu.Lock()
 	s.WindowStats.Count = stats.Count
+	s.WindowStats.TPSSampleCount = stats.TPSSampleCount
+	s.WindowStats.TTFTSampleCount = stats.TTFTSampleCount
+	s.WindowStats.TPOTSampleCount = stats.TPOTSampleCount
 	s.WindowStats.TPSAvg = nil
 	s.WindowStats.TTFTAvg = nil
 	s.WindowStats.TPOTAvg = nil
@@ -208,6 +252,43 @@ func (s *RequestState) SetErrorsTotal(total int) {
 	}
 	s.mu.Lock()
 	s.ErrorsTotal = total
+	s.mu.Unlock()
+}
+
+func (s *RequestState) SetWindowStatsE2E(stats RequestWindowStatsE2E) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.WindowStatsE2E.Count = stats.Count
+	s.WindowStatsE2E.TPSE2EAvg = nil
+	s.WindowStatsE2E.TPOTE2EAvg = nil
+	if stats.TPSE2EAvg != nil {
+		v := *stats.TPSE2EAvg
+		s.WindowStatsE2E.TPSE2EAvg = &v
+	}
+	if stats.TPOTE2EAvg != nil {
+		v := *stats.TPOTE2EAvg
+		s.WindowStatsE2E.TPOTE2EAvg = &v
+	}
+	s.mu.Unlock()
+}
+
+func (s *RequestState) SetE2EMetrics(tpsE2E *float64, tpotE2E *float64) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.TPSE2E = nil
+	s.TPOTE2E = nil
+	if tpsE2E != nil {
+		v := *tpsE2E
+		s.TPSE2E = &v
+	}
+	if tpotE2E != nil {
+		v := *tpotE2E
+		s.TPOTE2E = &v
+	}
 	s.mu.Unlock()
 }
 

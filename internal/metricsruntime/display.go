@@ -120,7 +120,7 @@ func PrintProgress(state *RequestState, isTTY bool) {
 		}
 	}
 
-	line := fmt.Sprintf("metrics tracking=%s elapsed=%s ttft=%s tps=%s out=%s provider=%s model=%s",
+	line := fmt.Sprintf("metrics tracking=%s elapsed=%s ttft=%s tps_gen=%s out=%s provider=%s model=%s",
 		trackingShort,
 		elapsed,
 		ttft,
@@ -144,20 +144,23 @@ func envBoolTrue(name string) bool {
 }
 
 type summaryLine struct {
-	TrackingID   string             `json:"tracking_id"`
-	Provider     string             `json:"provider"`
-	Model        string             `json:"model"`
-	WindowStats  RequestWindowStats `json:"window_stats"`
-	ErrorsTotal  int                `json:"errors_total"`
-	TPS          *float64           `json:"tps"`
-	TTFT         *float64           `json:"ttft"`
-	TPOT         *float64           `json:"tpot"`
-	InputTokens  *int               `json:"input_tokens"`
-	OutputTokens *int               `json:"output_tokens"`
-	DurationMs   int64              `json:"duration_ms"`
-	StatusCode   *int               `json:"status_code"`
-	RequestPath  string             `json:"request_path"`
-	UsageNote    string             `json:"usage_note"`
+	TrackingID     string                `json:"tracking_id"`
+	Provider       string                `json:"provider"`
+	Model          string                `json:"model"`
+	WindowStats    RequestWindowStats    `json:"window_stats"`
+	WindowStatsE2E RequestWindowStatsE2E `json:"window_stats_e2e"`
+	ErrorsTotal    int                   `json:"errors_total"`
+	TPSGen         *float64              `json:"tps_gen"`
+	TTFT           *float64              `json:"ttft"`
+	TPOT           *float64              `json:"tpot"`
+	TPSE2E         *float64              `json:"tps_e2e"`
+	TPOTE2E        *float64              `json:"tpot_e2e"`
+	InputTokens    *int                  `json:"input_tokens"`
+	OutputTokens   *int                  `json:"output_tokens"`
+	DurationMs     int64                 `json:"duration_ms"`
+	StatusCode     *int                  `json:"status_code"`
+	RequestPath    string                `json:"request_path"`
+	UsageNote      string                `json:"usage_note"`
 }
 
 func PrintSummary(state *RequestState) {
@@ -213,20 +216,23 @@ func PrintSummary(state *RequestState) {
 	}
 
 	line := summaryLine{
-		TrackingID:   snap.TrackingID,
-		Provider:     snap.Provider,
-		Model:        snap.Model,
-		WindowStats:  snap.WindowStats,
-		ErrorsTotal:  snap.ErrorsTotal,
-		TPS:          tpsPtr,
-		TTFT:         ttftPtr,
-		TPOT:         tpotPtr,
-		InputTokens:  snap.InputTokens,
-		OutputTokens: snap.OutputTokens,
-		DurationMs:   durationMs,
-		StatusCode:   statusCodePtr,
-		RequestPath:  snap.RequestPath,
-		UsageNote:    usageNote,
+		TrackingID:     snap.TrackingID,
+		Provider:       snap.Provider,
+		Model:          snap.Model,
+		WindowStats:    snap.WindowStats,
+		WindowStatsE2E: snap.WindowStatsE2E,
+		ErrorsTotal:    snap.ErrorsTotal,
+		TPSGen:         tpsPtr,
+		TTFT:           ttftPtr,
+		TPOT:           tpotPtr,
+		TPSE2E:         snap.TPSE2E,
+		TPOTE2E:        snap.TPOTE2E,
+		InputTokens:    snap.InputTokens,
+		OutputTokens:   snap.OutputTokens,
+		DurationMs:     durationMs,
+		StatusCode:     statusCodePtr,
+		RequestPath:    snap.RequestPath,
+		UsageNote:      usageNote,
 	}
 
 	b, err := json.Marshal(line)
