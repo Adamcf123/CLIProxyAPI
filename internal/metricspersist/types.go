@@ -16,9 +16,9 @@ type MetricRecord struct {
 	// current write path should always set it.
 	Streaming *bool
 
-	TPS  *float64
-	TTFT *float64
-	TPOT *float64
+	TPSGen *float64
+	TTFT   *float64
+	TPOT   *float64
 
 	InputTokens  *int64
 	OutputTokens *int64
