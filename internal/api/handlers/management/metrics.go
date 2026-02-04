@@ -81,7 +81,7 @@ type metricsRow struct {
 	StatusCode   *int64   `json:"status_code"`
 	ErrorInfo    *string  `json:"error_info"`
 	CreatedAt    string   `json:"created_at"`
-	TPS          *float64 `json:"tps"`
+	TPSGen       *float64 `json:"tps_gen"`
 	TTFTMillis   *int64   `json:"ttft_ms"`
 	TPOTMillis   *int64   `json:"tpot_ms"`
 	DurationMS   *int64   `json:"duration_ms"`
@@ -105,7 +105,7 @@ type metricsPercentileMillis struct {
 }
 
 type metricsPercentilesMetrics struct {
-	TPS        metricsPercentileFloat  `json:"tps"`
+	TPSGen     metricsPercentileFloat  `json:"tps_gen"`
 	TTFTMillis metricsPercentileMillis `json:"ttft_ms"`
 	TPOTMillis metricsPercentileMillis `json:"tpot_ms"`
 	DurationMS metricsPercentileMillis `json:"duration_ms"`
@@ -128,8 +128,8 @@ type metricsPercentilesResponse struct {
 type metricsBucketsMetrics struct {
 	// *_sample_count makes NULL averages unambiguous: the bucket may have requests
 	// (Count>0) but still have zero usable samples for a specific metric.
-	TPSAvg         *float64 `json:"tps_avg"`
-	TPSSampleCount int      `json:"tps_sample_count"`
+	TPSGenAvg         *float64 `json:"tps_gen_avg"`
+	TPSGenSampleCount int      `json:"tps_gen_sample_count"`
 
 	TPSE2EAvg         *float64 `json:"tps_e2e_avg"`
 	TPSE2ESampleCount int      `json:"tps_e2e_sample_count"`
@@ -393,7 +393,7 @@ func ceilToBucketUTC(t time.Time, bucket time.Duration) time.Time {
 
 type metricsPercentilesAgg struct {
 	Count      int
-	TPS        []float64
+	TPSGen     []float64
 	TTFTSec    []float64
 	TPOTSec    []float64
 	DurationMS []float64
@@ -431,7 +431,7 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		streaming,
 		status_code,
 		error_info,
-		tps,
+		tps_gen,
 		ttft,
 		tpot,
 		duration_ms
@@ -524,7 +524,7 @@ func (h *Handler) queryMetricsPercentiles(ctx context.Context, from, to time.Tim
 		}
 		agg.Count++
 		if tpsVal.Valid {
-			agg.TPS = append(agg.TPS, tpsVal.Float64)
+			agg.TPSGen = append(agg.TPSGen, tpsVal.Float64)
 		}
 		if ttftVal.Valid {
 			agg.TTFTSec = append(agg.TTFTSec, ttftVal.Float64)
@@ -606,12 +606,12 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		successFlagCase + " AS success_flag, " +
 		"((unixepoch(created_at) / ?) * ?) AS bucket_start, " +
 		"COUNT(*) AS count, " +
-		"SUM(CASE WHEN tps IS NOT NULL THEN 1 ELSE 0 END) AS tps_sample_count, " +
+		"SUM(CASE WHEN tps_gen IS NOT NULL THEN 1 ELSE 0 END) AS tps_gen_sample_count, " +
 		"SUM(CASE WHEN ttft IS NOT NULL THEN 1 ELSE 0 END) AS ttft_sample_count, " +
 		"SUM(CASE WHEN tpot IS NOT NULL THEN 1 ELSE 0 END) AS tpot_sample_count, " +
 		"SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END) AS duration_ms_sample_count, " +
 		"SUM(CASE WHEN output_tokens IS NOT NULL AND duration_ms IS NOT NULL AND duration_ms > 0 THEN 1 ELSE 0 END) AS tps_e2e_sample_count, " +
-		"AVG(tps) AS tps_avg, " +
+		"AVG(tps_gen) AS tps_gen_avg, " +
 		"AVG(CASE WHEN output_tokens IS NOT NULL AND duration_ms IS NOT NULL AND duration_ms > 0 THEN (CAST(output_tokens AS REAL) / (CAST(duration_ms AS REAL) / 1000.0)) END) AS tps_e2e_avg, " +
 		"AVG(ttft) AS ttft_avg, " +
 		"AVG(tpot) AS tpot_avg, " +
@@ -711,7 +711,7 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		}
 
 		metricsOut := metricsBucketsMetrics{
-			TPSSampleCount:        int(tpsSample),
+			TPSGenSampleCount:     int(tpsSample),
 			TPSE2ESampleCount:     int(tpsE2ESample),
 			TTFTMillisSampleCount: int(ttftSample),
 			TPOTMillisSampleCount: int(tpotSample),
@@ -719,7 +719,7 @@ func (h *Handler) queryMetricsBuckets(ctx context.Context, from, to time.Time, b
 		}
 		if tpsAvg.Valid {
 			v := tpsAvg.Float64
-			metricsOut.TPSAvg = &v
+			metricsOut.TPSGenAvg = &v
 		}
 		if tpsE2EAvg.Valid {
 			v := tpsE2EAvg.Float64
@@ -890,11 +890,11 @@ func buildMetricsPercentiles(agg *metricsPercentilesAgg) metricsPercentilesMetri
 		return out
 	}
 
-	out.TPS.SampleCount = len(agg.TPS)
-	if p50, p95, p99, ok := metrics.CalculateP50P95P99(agg.TPS); ok {
-		out.TPS.P50 = &p50
-		out.TPS.P95 = &p95
-		out.TPS.P99 = &p99
+	out.TPSGen.SampleCount = len(agg.TPSGen)
+	if p50, p95, p99, ok := metrics.CalculateP50P95P99(agg.TPSGen); ok {
+		out.TPSGen.P50 = &p50
+		out.TPSGen.P95 = &p95
+		out.TPSGen.P99 = &p99
 	}
 
 	out.TTFTMillis.SampleCount = len(agg.TTFTSec)
@@ -1011,7 +1011,7 @@ func (h *Handler) queryMetricsByRequestID(ctx context.Context, requestID string)
 		provider,
 		model,
 		streaming,
-		tps,
+		tps_gen,
 		ttft,
 		tpot,
 		input_tokens,
@@ -1067,7 +1067,7 @@ func (h *Handler) queryMetricsByRequestID(ctx context.Context, requestID string)
 		Streaming: streamingVal != 0,
 		CreatedAt: createdAt,
 	}
-	out.TPS = nullFloat64Ptr(tpsVal)
+	out.TPSGen = nullFloat64Ptr(tpsVal)
 	out.DurationMS = nullInt64Ptr(durMS)
 	out.StatusCode = nullInt64Ptr(statusCode)
 	out.ErrorInfo = nullStringPtr(errorInfo)
