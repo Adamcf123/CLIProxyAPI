@@ -74,14 +74,14 @@ func TestMetricsPlugin_StreamingWithContentTokens_ComputesRates(t *testing.T) {
 	}
 
 	var (
-		tps  sql.NullFloat64
-		ttft sql.NullFloat64
-		tpot sql.NullFloat64
+		tpsGen sql.NullFloat64
+		ttft   sql.NullFloat64
+		tpot   sql.NullFloat64
 	)
 	err = db.QueryRow(
-		`SELECT tps, ttft, tpot FROM metrics WHERE request_id = ?;`,
+		`SELECT tps_gen, ttft, tpot FROM metrics WHERE request_id = ?;`,
 		requestID,
-	).Scan(&tps, &ttft, &tpot)
+	).Scan(&tpsGen, &ttft, &tpot)
 	if err == sql.ErrNoRows {
 		t.Fatalf("expected a persisted metrics row for request_id=%s", requestID)
 	}
@@ -92,8 +92,8 @@ func TestMetricsPlugin_StreamingWithContentTokens_ComputesRates(t *testing.T) {
 	if !ttft.Valid {
 		t.Fatalf("expected ttft to be non-NULL for streaming with first token")
 	}
-	if !tps.Valid {
-		t.Fatalf("expected tps to be non-NULL for streaming with sufficient evidence")
+	if !tpsGen.Valid {
+		t.Fatalf("expected tps_gen to be non-NULL for streaming with sufficient evidence")
 	}
 	if !tpot.Valid {
 		t.Fatalf("expected tpot to be non-NULL for streaming with sufficient evidence")
