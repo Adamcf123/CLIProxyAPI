@@ -75,7 +75,7 @@ func TestMetricsPlugin_NoUsageRecord_PersistsQueryableRow(t *testing.T) {
 	)
 
 	err = db.QueryRow(
-		`SELECT input_tokens, output_tokens, total_tokens, tps, tpot, status_code, streaming, error_info FROM metrics WHERE request_id = ?;`,
+		`SELECT input_tokens, output_tokens, total_tokens, tps_gen, tpot, status_code, streaming, error_info FROM metrics WHERE request_id = ?;`,
 		requestID,
 	).Scan(&inputTokens, &outputTokens, &totalTokens, &tps, &tpot, &statusCode, &streaming, &errorInfo)
 	if err == sql.ErrNoRows {
@@ -121,7 +121,7 @@ func insertMetricRecord(db *sql.DB, r metricspersist.MetricRecord) error {
 			provider,
 			model,
 			streaming,
-			tps,
+			tps_gen,
 			ttft,
 			tpot,
 			input_tokens,
@@ -136,7 +136,7 @@ func insertMetricRecord(db *sql.DB, r metricspersist.MetricRecord) error {
 		r.Provider,
 		r.Model,
 		streaming,
-		r.TPS,
+		r.TPSGen,
 		r.TTFT,
 		r.TPOT,
 		r.InputTokens,

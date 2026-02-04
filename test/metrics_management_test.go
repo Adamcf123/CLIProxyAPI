@@ -74,7 +74,7 @@ type percentilesResponse struct {
 		Streaming bool   `json:"streaming"`
 		Count     int    `json:"count"`
 		Metrics   struct {
-			TPS        percentileFloat  `json:"tps"`
+			TPSGen     percentileFloat  `json:"tps_gen"`
 			TTFTMillis percentileMillis `json:"ttft_ms"`
 			TPOTMillis percentileMillis `json:"tpot_ms"`
 			DurationMS percentileMillis `json:"duration_ms"`
@@ -86,7 +86,7 @@ type percentilesResponse struct {
 		Streaming bool   `json:"streaming"`
 		Count     int    `json:"count"`
 		Metrics   struct {
-			TPS        percentileFloat  `json:"tps"`
+			TPSGen     percentileFloat  `json:"tps_gen"`
 			TTFTMillis percentileMillis `json:"ttft_ms"`
 			TPOTMillis percentileMillis `json:"tpot_ms"`
 			DurationMS percentileMillis `json:"duration_ms"`
@@ -119,8 +119,8 @@ type bucketsResponse struct {
 			Count         int    `json:"count"`
 			CanceledCount int    `json:"canceled_count"`
 			Metrics       struct {
-				TPSAvg                *float64 `json:"tps_avg"`
-				TPSSampleCount        int      `json:"tps_sample_count"`
+				TPSGenAvg             *float64 `json:"tps_gen_avg"`
+				TPSGenSampleCount     int      `json:"tps_gen_sample_count"`
 				TPSE2EAvg             *float64 `json:"tps_e2e_avg"`
 				TPSE2ESampleCount     int      `json:"tps_e2e_sample_count"`
 				TTFTMillisAvg         *int64   `json:"ttft_ms_avg"`
@@ -141,8 +141,8 @@ type bucketsResponse struct {
 			Count         int    `json:"count"`
 			CanceledCount int    `json:"canceled_count"`
 			Metrics       struct {
-				TPSAvg                *float64 `json:"tps_avg"`
-				TPSSampleCount        int      `json:"tps_sample_count"`
+				TPSGenAvg             *float64 `json:"tps_gen_avg"`
+				TPSGenSampleCount     int      `json:"tps_gen_sample_count"`
 				TPSE2EAvg             *float64 `json:"tps_e2e_avg"`
 				TPSE2ESampleCount     int      `json:"tps_e2e_sample_count"`
 				TTFTMillisAvg         *int64   `json:"ttft_ms_avg"`
@@ -183,7 +183,7 @@ func seedMetricsDB(t *testing.T, dbPath string) {
 		provider,
 		model,
 		streaming,
-		tps,
+		tps_gen,
 		ttft,
 		tpot,
 		input_tokens,
@@ -257,7 +257,7 @@ func seedPercentilesMetricsDB(t *testing.T, dbPath string) {
 		provider,
 		model,
 		streaming,
-		tps,
+		tps_gen,
 		ttft,
 		tpot,
 		input_tokens,
@@ -332,7 +332,7 @@ func seedBucketsMetricsDB(t *testing.T, dbPath string) {
 		provider,
 		model,
 		streaming,
-		tps,
+		tps_gen,
 		ttft,
 		tpot,
 		input_tokens,
@@ -751,15 +751,15 @@ func TestManagementMetrics_PercentilesMode(t *testing.T) {
 	if s.Count != 3 {
 		t.Fatalf("success.count: got %d want %d", s.Count, 3)
 	}
-	if s.Metrics.TPS.SampleCount != 2 {
-		t.Fatalf("success.tps.sample_count: got %d want %d", s.Metrics.TPS.SampleCount, 2)
+	if s.Metrics.TPSGen.SampleCount != 2 {
+		t.Fatalf("success.tps_gen.sample_count: got %d want %d", s.Metrics.TPSGen.SampleCount, 2)
 	}
-	if s.Metrics.TPS.P50 == nil || s.Metrics.TPS.P95 == nil || s.Metrics.TPS.P99 == nil {
-		t.Fatalf("success.tps percentiles expected non-null")
+	if s.Metrics.TPSGen.P50 == nil || s.Metrics.TPSGen.P95 == nil || s.Metrics.TPSGen.P99 == nil {
+		t.Fatalf("success.tps_gen percentiles expected non-null")
 	}
-	assertFloatApprox(t, *s.Metrics.TPS.P50, 20.0, 1e-9)
-	assertFloatApprox(t, *s.Metrics.TPS.P95, 29.0, 1e-9)
-	assertFloatApprox(t, *s.Metrics.TPS.P99, 29.8, 1e-9)
+	assertFloatApprox(t, *s.Metrics.TPSGen.P50, 20.0, 1e-9)
+	assertFloatApprox(t, *s.Metrics.TPSGen.P95, 29.0, 1e-9)
+	assertFloatApprox(t, *s.Metrics.TPSGen.P99, 29.8, 1e-9)
 
 	if s.Metrics.TTFTMillis.SampleCount != 1 {
 		t.Fatalf("success.ttft_ms.sample_count: got %d want %d", s.Metrics.TTFTMillis.SampleCount, 1)
@@ -798,11 +798,11 @@ func TestManagementMetrics_PercentilesMode(t *testing.T) {
 	if f.Count != 2 {
 		t.Fatalf("failure.count: got %d want %d", f.Count, 2)
 	}
-	if f.Metrics.TPS.SampleCount != 0 {
-		t.Fatalf("failure.tps.sample_count: got %d want %d", f.Metrics.TPS.SampleCount, 0)
+	if f.Metrics.TPSGen.SampleCount != 0 {
+		t.Fatalf("failure.tps_gen.sample_count: got %d want %d", f.Metrics.TPSGen.SampleCount, 0)
 	}
-	if f.Metrics.TPS.P50 != nil || f.Metrics.TPS.P95 != nil || f.Metrics.TPS.P99 != nil {
-		t.Fatalf("failure.tps percentiles expected null when no samples")
+	if f.Metrics.TPSGen.P50 != nil || f.Metrics.TPSGen.P95 != nil || f.Metrics.TPSGen.P99 != nil {
+		t.Fatalf("failure.tps_gen percentiles expected null when no samples")
 	}
 }
 
@@ -865,7 +865,7 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if s.Buckets[0].Metrics.TTFTMillisAvg != nil || s.Buckets[0].Metrics.TPOTMillisAvg != nil || s.Buckets[0].Metrics.DurationMSAvg != nil || s.Buckets[0].Metrics.TPSE2EAvg != nil {
 		t.Fatalf("empty bucket metrics expected null")
 	}
-	if s.Buckets[0].Metrics.TPSSampleCount != 0 || s.Buckets[0].Metrics.TPSE2ESampleCount != 0 || s.Buckets[0].Metrics.TTFTMillisSampleCount != 0 || s.Buckets[0].Metrics.TPOTMillisSampleCount != 0 || s.Buckets[0].Metrics.DurationMSSampleCount != 0 {
+	if s.Buckets[0].Metrics.TPSGenSampleCount != 0 || s.Buckets[0].Metrics.TPSE2ESampleCount != 0 || s.Buckets[0].Metrics.TTFTMillisSampleCount != 0 || s.Buckets[0].Metrics.TPOTMillisSampleCount != 0 || s.Buckets[0].Metrics.DurationMSSampleCount != 0 {
 		t.Fatalf("empty bucket metrics sample_count expected 0")
 	}
 
@@ -879,8 +879,8 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if s.Buckets[2].CanceledCount != 1 {
 		t.Fatalf("data bucket canceled_count: got %d want %d", s.Buckets[2].CanceledCount, 1)
 	}
-	if s.Buckets[2].Metrics.TPSSampleCount != 1 {
-		t.Fatalf("tps_sample_count: got=%d want=%d", s.Buckets[2].Metrics.TPSSampleCount, 1)
+	if s.Buckets[2].Metrics.TPSGenSampleCount != 1 {
+		t.Fatalf("tps_gen_sample_count: got=%d want=%d", s.Buckets[2].Metrics.TPSGenSampleCount, 1)
 	}
 	if s.Buckets[2].Metrics.TPSE2ESampleCount != 1 {
 		t.Fatalf("tps_e2e_sample_count: got=%d want=%d", s.Buckets[2].Metrics.TPSE2ESampleCount, 1)
@@ -918,7 +918,7 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if f.Buckets[0].Metrics.TTFTMillisAvg != nil || f.Buckets[0].Metrics.TPOTMillisAvg != nil || f.Buckets[0].Metrics.DurationMSAvg != nil || f.Buckets[0].Metrics.TPSE2EAvg != nil {
 		t.Fatalf("failure empty bucket metrics expected null")
 	}
-	if f.Buckets[0].Metrics.TPSSampleCount != 0 || f.Buckets[0].Metrics.TPSE2ESampleCount != 0 || f.Buckets[0].Metrics.TTFTMillisSampleCount != 0 || f.Buckets[0].Metrics.TPOTMillisSampleCount != 0 || f.Buckets[0].Metrics.DurationMSSampleCount != 0 {
+	if f.Buckets[0].Metrics.TPSGenSampleCount != 0 || f.Buckets[0].Metrics.TPSE2ESampleCount != 0 || f.Buckets[0].Metrics.TTFTMillisSampleCount != 0 || f.Buckets[0].Metrics.TPOTMillisSampleCount != 0 || f.Buckets[0].Metrics.DurationMSSampleCount != 0 {
 		t.Fatalf("failure empty bucket metrics sample_count expected 0")
 	}
 
@@ -932,8 +932,8 @@ func TestManagementMetrics_BucketsMode_AlignmentAndEmptyBuckets(t *testing.T) {
 	if f.Buckets[2].CanceledCount != 1 {
 		t.Fatalf("failure data bucket canceled_count: got %d want %d", f.Buckets[2].CanceledCount, 1)
 	}
-	if f.Buckets[2].Metrics.TPSSampleCount != 0 {
-		t.Fatalf("failure tps_sample_count: got=%d want=%d", f.Buckets[2].Metrics.TPSSampleCount, 0)
+	if f.Buckets[2].Metrics.TPSGenSampleCount != 0 {
+		t.Fatalf("failure tps_gen_sample_count: got=%d want=%d", f.Buckets[2].Metrics.TPSGenSampleCount, 0)
 	}
 	if f.Buckets[2].Metrics.TPSE2ESampleCount != 0 {
 		t.Fatalf("failure tps_e2e_sample_count: got=%d want=%d", f.Buckets[2].Metrics.TPSE2ESampleCount, 0)
