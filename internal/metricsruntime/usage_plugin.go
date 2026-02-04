@@ -44,6 +44,7 @@ const (
 // metrics (TPS, TTFT, TPOT) and persist them to SQLite.
 type MetricsPlugin struct {
 	collector *metrics.TPSCollector
+	e2e       *metrics.E2ECollector
 
 	errorsMu    sync.Mutex
 	errorsTotal map[metrics.MetricKey]int
@@ -56,6 +57,7 @@ func NewMetricsPlugin(collector *metrics.TPSCollector) *MetricsPlugin {
 	}
 	return &MetricsPlugin{
 		collector:   collector,
+		e2e:         metrics.NewE2ECollector(),
 		errorsTotal: make(map[metrics.MetricKey]int),
 	}
 }
@@ -95,6 +97,8 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		statusCodePtr *int64
 		errorInfoPtr  *string
 	)
+
+	var durationMs int64
 
 	if !usageMissing {
 		if inputTokens != 0 {
@@ -248,8 +252,36 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 
 	// Calculate duration if we have start time.
 	if state != nil && !state.StartedAt.IsZero() {
-		duration := now.Sub(state.StartedAt).Milliseconds()
-		durationMSPtr = &duration
+		durationMs = now.Sub(state.StartedAt).Milliseconds()
+		durationMSPtr = &durationMs
+	}
+
+	// Compute end-to-end rates (based on output_tokens / total duration). This is a separate
+	// signal from streaming token-timing TPS/TPOT and is expected to be available more often.
+	if state != nil && hasKey && !isCanceled && outputTokens > 0 && durationMs > 0 {
+		statusCode := int64(0)
+		if statusCodePtr != nil {
+			statusCode = *statusCodePtr
+		}
+		isFailure := record.Failed || snap.LastError != "" || statusCode >= 400
+		if !isFailure {
+			secs := float64(durationMs) / 1000.0
+			if secs > 0 {
+				v := float64(outputTokens) / secs
+				tpse2e := &v
+				w := secs / float64(outputTokens)
+				tpote2e := &w
+				state.SetE2EMetrics(tpse2e, tpote2e)
+
+				p.e2e.Add(key, *tpse2e, *tpote2e)
+				count, tpsAvg, tpotAvg, ok := p.e2e.GetAverages(key)
+				if ok {
+					v1 := tpsAvg
+					v2 := tpotAvg
+					state.SetWindowStatsE2E(RequestWindowStatsE2E{Count: count, TPSE2EAvg: &v1, TPOTE2EAvg: &v2})
+				}
+			}
+		}
 	}
 
 	// Persist to SQLite asynchronously (off request path).
@@ -260,7 +292,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 			Provider:     provider,
 			Model:        model,
 			Streaming:    &snap.Streaming,
-			TPS:          tps,
+			TPSGen:       tps,
 			TTFT:         ttft,
 			TPOT:         tpot,
 			InputTokens:  inputTokensPtr,
@@ -275,7 +307,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 
 func windowStatsFromCollector(stats metrics.WindowStats, ok bool) RequestWindowStats {
 	if !ok || stats.Count <= 0 {
-		return RequestWindowStats{Count: 0}
+		return RequestWindowStats{Count: 0, TPSSampleCount: 0, TTFTSampleCount: 0, TPOTSampleCount: 0}
 	}
 	// WindowStats uses concrete float64 fields; metrics_summary uses pointers so an empty
 	// window can express avg=null instead of 0.
@@ -283,10 +315,13 @@ func windowStatsFromCollector(stats metrics.WindowStats, ok bool) RequestWindowS
 	ttft := stats.TTFTAvg
 	tpot := stats.TPOTAvg
 	return RequestWindowStats{
-		Count:   stats.Count,
-		TPSAvg:  &tps,
-		TTFTAvg: &ttft,
-		TPOTAvg: &tpot,
+		Count:           stats.Count,
+		TPSAvg:          &tps,
+		TTFTAvg:         &ttft,
+		TPOTAvg:         &tpot,
+		TPSSampleCount:  stats.Count,
+		TTFTSampleCount: stats.Count,
+		TPOTSampleCount: stats.Count,
 	}
 }
 
