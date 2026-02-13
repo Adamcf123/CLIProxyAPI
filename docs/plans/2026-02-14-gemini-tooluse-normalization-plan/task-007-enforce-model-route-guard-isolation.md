@@ -15,6 +15,20 @@ Verify the new all-tool normalization behavior remains strictly isolated to the 
 **Spec**: `../2026-02-14-gemini-tooluse-normalization-design/bdd-specs.md`  
 **Scenario**: Scenario 7: Keep behavior isolated by model and route
 
+## Scenario-Test Mapping
+
+- Scenario 7 Given/When/Then -> `TestClaudeExecutorFromEqualsToNormalization_GuardIsolation`
+- Positive control in same fixture -> `TestClaudeExecutorFromEqualsToNormalization_GuardIsolation_GuardOnNormalizes`
+- Required isolation matrix:
+  - model mismatch only (`from == to`, non-gemini model)
+  - route mismatch only (`from != to`, gemini model)
+  - both mismatch (`from != to`, non-gemini model)
+- Required assertions:
+  - no split/error side effects outside guard
+  - event sequence and payload equivalence preserved outside guard
+  - test fixture stream is identical while only guard conditions vary
+  - guard-on case in the same fixture must emit normalization signal as anchor
+
 ## Files to Modify/Create
 
 - Modify: `internal/runtime/executor/claude_executor.go`
@@ -26,9 +40,12 @@ Verify the new all-tool normalization behavior remains strictly isolated to the 
 - Confirm Scenario 7 checks both non-gemini model and `from != to` route.
 - Confirm RED failures represent guard leakage, not unrelated test setup.
 - Confirm assertions validate absence of split/error side effects outside guard.
+- Confirm matrix coverage for single-factor and double-factor guard mismatch cases.
+- Confirm same-fixture positive control proves normalization works when guard matches.
 
 ### RED
 - Add failing guard-isolation tests for non-target model and route variants.
+- RED failure signature must be semantic (guard leakage causing split/error mutation outside guarded path).
 
 ### GREEN
 - Refine guard checks or branch placement to guarantee isolation.

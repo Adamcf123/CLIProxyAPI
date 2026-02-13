@@ -17,6 +17,15 @@ Ensure malformed concatenated object sequences produce explicit parseable `inval
 **Spec**: `../2026-02-14-gemini-tooluse-normalization-design/bdd-specs.md`  
 **Scenario**: Scenario 4: Reject malformed concatenated payloads with explicit error
 
+## Scenario-Test Mapping
+
+- Scenario 4 Given/When/Then -> `TestNormalizeToolUseLine_EmitsInvalidToolInputForMalformedNonEditSequence`
+- Stream behavior verification -> `TestClaudeExecutorFromEqualsToNormalization/malformed non-edit emits invalid_tool_input`
+- Required assertions:
+  - error event is parseable with `type=error` and `error.type=invalid_tool_input`
+  - corrupted tool arguments are not forwarded
+  - error message does not include raw malformed payload content
+
 ## Files to Modify/Create
 
 - Modify: `internal/runtime/executor/claude_executor.go`
@@ -28,10 +37,12 @@ Ensure malformed concatenated object sequences produce explicit parseable `inval
 - Confirm Scenario 4 maps to malformed-sequence error handling only.
 - Confirm assertions check both error type and absence of corrupted forwarded args.
 - Confirm error output does not leak raw sensitive payload content.
+- Confirm tests assert structured error fields, not string-contains only checks.
 
 ### RED
 - Add failing stream tests for malformed concatenated non-edit payloads.
 - Verify failures are behavior-semantic (missing invalid_tool_input or bad forwarding).
+- RED failure signature must be semantic (wrong error contract, payload leak, or bad forwarding).
 
 ### GREEN
 - Implement malformed sequence detection and explicit error emission using existing error contract.

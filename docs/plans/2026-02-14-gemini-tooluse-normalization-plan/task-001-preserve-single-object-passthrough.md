@@ -15,6 +15,15 @@ Ensure non-`edit` `tool_use` payloads containing exactly one valid JSON object a
 **Spec**: `../2026-02-14-gemini-tooluse-normalization-design/bdd-specs.md`  
 **Scenario**: Scenario 1: Preserve valid single-object non-edit tool input
 
+## Scenario-Test Mapping
+
+- Scenario 1 Given/When/Then -> `TestNormalizeToolUseLine_NonEditSingleObjectPassthrough` (unit)
+- Stream guard verification -> `TestClaudeExecutorFromEqualsToNormalization/non-edit single object passthrough`
+- Required assertions:
+  - tool name remains unchanged
+  - input payload remains unchanged for single-object non-edit input
+  - no synthetic split/error events are emitted
+
 ## Files to Modify/Create
 
 - Modify: `internal/runtime/executor/claude_executor.go`
@@ -26,10 +35,12 @@ Ensure non-`edit` `tool_use` payloads containing exactly one valid JSON object a
 - Confirm one-to-one mapping between Scenario 1 and the target non-edit passthrough tests.
 - Confirm RED failure target is behavioral mismatch, not setup/import failure.
 - Confirm assertions validate unchanged tool name and unchanged input payload.
+- Confirm assertions include no-op semantics for split/error branches.
 
 ### RED
 - Add/extend stream tests where non-edit tool input is a single JSON object.
 - Verify current behavior fails against the exact passthrough assertions for the guarded path.
+- RED failure signature must be semantic (payload/tool-name mutation or unexpected split/error), not infra/setup failure.
 
 ### GREEN
 - Implement minimal executor changes to keep single-object non-edit payload byte-equivalent through normalization.
