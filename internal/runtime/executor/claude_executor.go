@@ -429,7 +429,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		if from == to {
 			scanner := bufio.NewScanner(decodedBody)
 			scanner.Buffer(nil, 52_428_800) // 50MB
-			suppressedToolBlocks := make(map[int64]struct{})
+			normalizationState := newToolUseNormalizationState()
 			for scanner.Scan() {
 				line := scanner.Bytes()
 				appendAPIResponseChunk(ctx, e.cfg, line)
@@ -442,11 +442,17 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 				// Apply normalizer if needed (gemini-3-flash-preview model)
 				if normalizer != nil {
-					var forward bool
-					line, forward = normalizeToolUseLine(line, normalizer, suppressedToolBlocks)
+					normalizedLines, forward := normalizeToolUseLine(line, normalizer, normalizationState)
 					if !forward {
 						continue
 					}
+					for i := range normalizedLines {
+						cloned := make([]byte, len(normalizedLines[i])+1)
+						copy(cloned, normalizedLines[i])
+						cloned[len(normalizedLines[i])] = '\n'
+						out <- cliproxyexecutor.StreamChunk{Payload: cloned}
+					}
+					continue
 				}
 
 				// Forward the line as-is to preserve SSE format
@@ -2099,41 +2105,130 @@ func injectSystemCacheControl(payload []byte) []byte {
 	return payload
 }
 
-// normalizeToolUseLine processes an SSE line and applies tool call normalization if needed.
-// For gemini-3-flash-preview model, converts malformed concatenated "edit" calls to "apply_patch".
-func normalizeToolUseLine(line []byte, normalizer *ToolCallNormalizer, suppressed map[int64]struct{}) ([]byte, bool) {
+type toolUseNormalizationState struct {
+	suppressed           map[int64]struct{}
+	active               map[int64]*bufferedToolUseBlock
+	syntheticIndexCursor int64
+}
+
+type bufferedToolUseBlock struct {
+	index      int64
+	toolName   string
+	toolID     string
+	startLine  []byte
+	startInput []byte
+	fragments  bytes.Buffer
+}
+
+func newToolUseNormalizationState() *toolUseNormalizationState {
+	return &toolUseNormalizationState{
+		suppressed:           make(map[int64]struct{}),
+		active:               make(map[int64]*bufferedToolUseBlock),
+		syntheticIndexCursor: -1,
+	}
+}
+
+func (b *bufferedToolUseBlock) assembledInput() []byte {
+	if b == nil {
+		return []byte(`{}`)
+	}
+	if b.fragments.Len() > 0 {
+		return bytes.TrimSpace(b.fragments.Bytes())
+	}
+	if len(b.startInput) == 0 {
+		return []byte(`{}`)
+	}
+	return bytes.TrimSpace(b.startInput)
+}
+
+func (s *toolUseNormalizationState) observeIndex(index int64) {
+	if index < 0 && index <= s.syntheticIndexCursor {
+		s.syntheticIndexCursor = index - 1
+	}
+}
+
+func (s *toolUseNormalizationState) nextSyntheticIndex() int64 {
+	idx := s.syntheticIndexCursor
+	s.syntheticIndexCursor--
+	return idx
+}
+
+// normalizeToolUseLine processes one SSE line and applies guarded tool-use normalization.
+// It may emit multiple data lines when a non-edit concatenated payload is split.
+func normalizeToolUseLine(line []byte, normalizer *ToolCallNormalizer, state *toolUseNormalizationState) ([][]byte, bool) {
 	payload := jsonPayload(line)
 	if len(payload) == 0 {
-		return line, true
+		return [][]byte{line}, true
 	}
 
-	if len(suppressed) > 0 {
-		if index, ok := findTopLevelNumberField(payload, "index"); ok {
-			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
-			if _, blocked := suppressed[index]; blocked {
-				if eventType == "content_block_stop" {
-					delete(suppressed, index)
+	eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+	if index, ok := findTopLevelNumberField(payload, "index"); ok {
+		state.observeIndex(index)
+
+		if block, hasActive := state.active[index]; hasActive {
+			switch eventType {
+			case "content_block_delta":
+				if deltaType := strings.TrimSpace(gjson.GetBytes(payload, "delta.type").String()); deltaType == "input_json_delta" {
+					fragment := gjson.GetBytes(payload, "delta.partial_json")
+					if !fragment.Exists() || fragment.Type != gjson.String {
+						delete(state.active, index)
+						state.suppressed[index] = struct{}{}
+						return [][]byte{buildToolNormalizationErrorLine(line, payload, fmt.Errorf("missing or invalid input_json_delta.partial_json"))}, true
+					}
+					block.fragments.WriteString(fragment.String())
 				}
+				return nil, false
+			case "content_block_stop":
+				delete(state.active, index)
+				emitted, err := finalizeBufferedToolUseBlock(block, line, normalizer, state)
+				if err != nil {
+					state.suppressed[index] = struct{}{}
+					return [][]byte{buildToolNormalizationErrorLine(line, payload, err)}, true
+				}
+				return emitted, true
+			default:
 				if strings.HasPrefix(eventType, "content_block_") {
 					return nil, false
 				}
 			}
 		}
+
+		if eventType == "content_block_start" {
+			bufferBlock, isToolUse, err := parseBufferedToolUseStart(payload, line, index)
+			if err != nil {
+				state.suppressed[index] = struct{}{}
+				return [][]byte{buildToolNormalizationErrorLine(line, payload, err)}, true
+			}
+			if isToolUse {
+				state.active[index] = bufferBlock
+				return nil, false
+			}
+		}
+
+		if _, blocked := state.suppressed[index]; blocked {
+			if eventType == "content_block_stop" {
+				delete(state.suppressed, index)
+			}
+			if strings.HasPrefix(eventType, "content_block_") {
+				return nil, false
+			}
+		}
 	}
-	updated, err := normalizeToolUsePayload(payload, normalizer)
+
+	updatedLines, err := normalizeToolUsePayload(payload, line, normalizer, state)
 	if err != nil {
 		if index, ok := findTopLevelNumberField(payload, "index"); ok {
-			suppressed[index] = struct{}{}
+			state.suppressed[index] = struct{}{}
 		}
-		return buildToolNormalizationErrorLine(line, payload, err), true
+		return [][]byte{buildToolNormalizationErrorLine(line, payload, err)}, true
 	}
-	if len(updated) == 0 {
-		return line, true
+	if len(updatedLines) == 0 {
+		return [][]byte{line}, true
 	}
-	return rebuildSSEDataLine(line, updated), true
+	return updatedLines, true
 }
 
-func normalizeToolUsePayload(payload []byte, normalizer *ToolCallNormalizer) ([]byte, error) {
+func normalizeToolUsePayload(payload, originalLine []byte, normalizer *ToolCallNormalizer, state *toolUseNormalizationState) ([][]byte, error) {
 	contentBlockStart, contentBlockEnd, ok, err := findTopLevelObjectField(payload, "content_block")
 	if err != nil || !ok {
 		return nil, err
@@ -2150,7 +2245,7 @@ func normalizeToolUsePayload(payload []byte, normalizer *ToolCallNormalizer) ([]
 	if err != nil {
 		return nil, err
 	}
-	if !ok || toolName != "edit" {
+	if !ok {
 		return nil, nil
 	}
 	inputStart, inputEnd, ok, err := findTopLevelInputValueSpan(contentBlock)
@@ -2161,25 +2256,207 @@ func normalizeToolUsePayload(payload []byte, normalizer *ToolCallNormalizer) ([]
 		return nil, nil
 	}
 
-	result := normalizer.NormalizeToolCall(toolName, bytes.TrimSpace(contentBlock[inputStart:inputEnd]))
-	if result.Err != nil {
-		return nil, result.Err
+	inputValue := bytes.TrimSpace(contentBlock[inputStart:inputEnd])
+	if toolName == "edit" {
+		result := normalizer.NormalizeToolCall(toolName, inputValue)
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		if result.ToolName == toolName && bytes.Equal(inputValue, result.Args) {
+			return nil, nil
+		}
+		nameJSON, err := json.Marshal(result.ToolName)
+		if err != nil {
+			return nil, err
+		}
+		updatedContentBlock, err := replaceSpans(contentBlock, []spanReplacement{
+			{start: nameStart, end: nameEnd, value: nameJSON},
+			{start: inputStart, end: inputEnd, value: result.Args},
+		})
+		if err != nil {
+			return nil, err
+		}
+		updatedPayload, err := replaceSpans(payload, []spanReplacement{{start: contentBlockStart, end: contentBlockEnd, value: updatedContentBlock}})
+		if err != nil {
+			return nil, err
+		}
+		return [][]byte{rebuildSSEDataLine(originalLine, updatedPayload)}, nil
 	}
-	if result.ToolName == toolName && bytes.Equal(bytes.TrimSpace(contentBlock[inputStart:inputEnd]), result.Args) {
+
+	if len(inputValue) == 0 || inputValue[0] != '{' {
 		return nil, nil
 	}
-	nameJSON, err := json.Marshal(result.ToolName)
+	objectsRaw, err := splitTopLevelJSONObjectSequence(inputValue)
+	if err != nil {
+		return nil, fmt.Errorf("invalid concatenated non-edit payload: %w", err)
+	}
+	if len(objectsRaw) <= 1 {
+		return nil, nil
+	}
+	for i := range objectsRaw {
+		if !gjson.ValidBytes(objectsRaw[i]) {
+			return nil, fmt.Errorf("invalid non-edit object at index %d", i)
+		}
+	}
+
+	updatedContentBlock, err := replaceSpans(contentBlock, []spanReplacement{{start: inputStart, end: inputEnd, value: objectsRaw[0]}})
 	if err != nil {
 		return nil, err
 	}
-	updatedContentBlock, err := replaceSpans(contentBlock, []spanReplacement{
-		{start: nameStart, end: nameEnd, value: nameJSON},
-		{start: inputStart, end: inputEnd, value: result.Args},
+	updatedPayload, err := replaceSpans(payload, []spanReplacement{{start: contentBlockStart, end: contentBlockEnd, value: updatedContentBlock}})
+	if err != nil {
+		return nil, err
+	}
+
+	outputLines := make([][]byte, 0, 1+(len(objectsRaw)-1)*2)
+	outputLines = append(outputLines, rebuildSSEDataLine(originalLine, updatedPayload))
+
+	toolID, _, _, hasToolID, err := findTopLevelStringField(contentBlock, "id")
+	if err != nil {
+		return nil, err
+	}
+	for i := 1; i < len(objectsRaw); i++ {
+		syntheticIndex := state.nextSyntheticIndex()
+		syntheticID := deriveSyntheticToolID(toolID, hasToolID, syntheticIndex, i)
+		startPayload, err := buildSyntheticToolStartPayload(toolName, syntheticID, syntheticIndex, objectsRaw[i])
+		if err != nil {
+			return nil, err
+		}
+		outputLines = append(outputLines, rebuildSSEDataLine(originalLine, startPayload))
+
+		stopPayload, err := json.Marshal(map[string]any{
+			"type":  "content_block_stop",
+			"index": syntheticIndex,
+		})
+		if err != nil {
+			return nil, err
+		}
+		outputLines = append(outputLines, rebuildSSEDataLine(originalLine, stopPayload))
+	}
+
+	return outputLines, nil
+}
+
+func parseBufferedToolUseStart(payload, line []byte, index int64) (*bufferedToolUseBlock, bool, error) {
+	contentBlockStart, contentBlockEnd, ok, err := findTopLevelObjectField(payload, "content_block")
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	contentBlock := payload[contentBlockStart:contentBlockEnd]
+	contentType, _, _, ok, err := findTopLevelStringField(contentBlock, "type")
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok || contentType != "tool_use" {
+		return nil, false, nil
+	}
+	toolName, _, _, ok, err := findTopLevelStringField(contentBlock, "name")
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok || strings.TrimSpace(toolName) == "" {
+		return nil, false, fmt.Errorf("tool_use block missing name")
+	}
+	inputStart, inputEnd, ok, err := findTopLevelInputValueSpan(contentBlock)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, fmt.Errorf("tool_use block missing input")
+	}
+	startInput := bytes.TrimSpace(contentBlock[inputStart:inputEnd])
+	if !isEmptyJSONObject(startInput) {
+		return nil, false, nil
+	}
+	toolID, _, _, hasToolID, err := findTopLevelStringField(contentBlock, "id")
+	if err != nil {
+		return nil, false, err
+	}
+	if !hasToolID {
+		toolID = ""
+	}
+	block := &bufferedToolUseBlock{
+		index:      index,
+		toolName:   toolName,
+		toolID:     toolID,
+		startLine:  bytes.Clone(line),
+		startInput: bytes.Clone(startInput),
+	}
+	return block, true, nil
+}
+
+func finalizeBufferedToolUseBlock(block *bufferedToolUseBlock, stopLine []byte, normalizer *ToolCallNormalizer, state *toolUseNormalizationState) ([][]byte, error) {
+	if block == nil {
+		return nil, fmt.Errorf("missing buffered tool block")
+	}
+	input := block.assembledInput()
+	if len(input) == 0 {
+		input = []byte(`{}`)
+	}
+	basePayload := jsonPayload(block.startLine)
+	if len(basePayload) == 0 {
+		return nil, fmt.Errorf("buffered tool start payload missing")
+	}
+	contentBlockStart, contentBlockEnd, ok, err := findTopLevelObjectField(basePayload, "content_block")
+	if err != nil || !ok {
+		return nil, fmt.Errorf("buffered tool start missing content_block")
+	}
+	contentBlock := basePayload[contentBlockStart:contentBlockEnd]
+	inputStart, inputEnd, ok, err := findTopLevelInputValueSpan(contentBlock)
+	if err != nil || !ok {
+		return nil, fmt.Errorf("buffered tool start missing input")
+	}
+	updatedContentBlock, err := replaceSpans(contentBlock, []spanReplacement{{start: inputStart, end: inputEnd, value: input}})
+	if err != nil {
+		return nil, err
+	}
+	startPayload, err := replaceSpans(basePayload, []spanReplacement{{start: contentBlockStart, end: contentBlockEnd, value: updatedContentBlock}})
+	if err != nil {
+		return nil, err
+	}
+	startLine := rebuildSSEDataLine(block.startLine, startPayload)
+	normalized, err := normalizeToolUsePayload(startPayload, startLine, normalizer, state)
+	if err != nil {
+		return nil, err
+	}
+	if len(normalized) == 0 {
+		normalized = [][]byte{startLine}
+	}
+	stopPayload, err := json.Marshal(map[string]any{
+		"type":  "content_block_stop",
+		"index": block.index,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return replaceSpans(payload, []spanReplacement{{start: contentBlockStart, end: contentBlockEnd, value: updatedContentBlock}})
+	normalized = append(normalized, rebuildSSEDataLine(stopLine, stopPayload))
+	return normalized, nil
+}
+
+func isEmptyJSONObject(value []byte) bool {
+	trimmed := bytes.TrimSpace(value)
+	return len(trimmed) == 2 && trimmed[0] == '{' && trimmed[1] == '}'
+}
+
+func deriveSyntheticToolID(baseID string, hasBaseID bool, syntheticIndex int64, sequence int) string {
+	if hasBaseID {
+		return fmt.Sprintf("%s_split_%d_%d", baseID, syntheticIndex, sequence)
+	}
+	return fmt.Sprintf("synthetic_tool_%d_%d", syntheticIndex, sequence)
+}
+
+func buildSyntheticToolStartPayload(toolName, toolID string, index int64, inputObject []byte) ([]byte, error) {
+	startEvent := map[string]any{
+		"type":  "content_block_start",
+		"index": index,
+		"content_block": map[string]any{
+			"type":  "tool_use",
+			"id":    toolID,
+			"name":  toolName,
+			"input": json.RawMessage(inputObject),
+		},
+	}
+	return json.Marshal(startEvent)
 }
 
 type spanReplacement struct {
