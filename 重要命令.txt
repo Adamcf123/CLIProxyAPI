@@ -9,11 +9,11 @@ http://localhost:53355/management.html
 ./cli-proxy-api
 go build -o cli-proxy-api ./cmd/server
 
-export ANTHROPIC_MODEL=gpt-5.4
+export ANTHROPIC_MODEL=gpt-5.3
 export ANTHROPIC_MODEL=gpt-5.3-codex
 export ANTHROPIC_MODEL=minimax-m2.5
-export ANTHROPIC_MODEL=glm-4.7
-export ANTHROPIC_MODEL=glm-4.7-no-think
+export ANTHROPIC_MODEL=glm-5
+export ANTHROPIC_MODEL=glm-5-no-think
 export ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 export ANTHROPIC_MODEL=claude-opus-4-5-20251101
 
@@ -21,6 +21,10 @@ export ANTHROPIC_MODEL=gemini-3-flash-preview
 
 export ANTHROPIC_MODEL=kimi-for-coding
 export ANTHROPIC_MODEL=kimi-k2.5
+
+Cliproxyapi-Claude/kimi-for-coding
+Cliproxyapi-codex/gpt-5.2
+
 
 curl http://127.0.0.1:53355/
 
