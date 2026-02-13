@@ -570,8 +570,14 @@ func jsonPayload(line []byte) []byte {
 	if bytes.HasPrefix(trimmed, []byte("event:")) {
 		return nil
 	}
+	// Handle "data:" or "data: " prefix (with optional space after colon)
 	if bytes.HasPrefix(trimmed, []byte("data:")) {
-		trimmed = bytes.TrimSpace(trimmed[len("data:"):])
+		rest := trimmed[len("data:"):]
+		// Skip optional space after colon
+		if len(rest) > 0 && rest[0] == ' ' {
+			rest = rest[1:]
+		}
+		trimmed = bytes.TrimSpace(rest)
 	}
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil
