@@ -1941,3 +1941,272 @@ func TestClaudeExecutor_Execute_KimiToolUsePatched_WhenRequestModelIsAliasedUpst
 		t.Fatalf("expected upstream assistant tool_use message to include a non-empty thinking block")
 	}
 }
+
+func TestClaudeExecutorFromEqualsToNormalization(t *testing.T) {
+	t.Run("gemini-3-flash-preview with from==to triggers normalizer for concatenated edit", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Mock SSE server that returns a concatenated edit tool payload
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/messages" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			// Simulate concatenated edit payload. The first text includes braces to verify parser safety.
+			editPayload := `{"file":"a.txt","text":"func x() { return 1; }","operations":[{"type":"replace","text":"func x() { return 2; }"}]}{"file":"b.txt","text":"old2","operations":[{"type":"replace","text":"new2"}]}`
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"edit\",\"input\":" + editPayload + "}}\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_stop\",\"index\":0}\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1}}\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n"))
+		}))
+		defer server.Close()
+
+		exec := NewClaudeExecutor(&config.Config{})
+		auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
+		payload := []byte(`{"model":"gemini-3-flash-preview","max_tokens":100,"stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"edit files"}]}]}`)
+		req := cliproxyexecutor.Request{Model: "gemini-3-flash-preview", Payload: payload}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude"), OriginalRequest: payload}
+
+		stream, err := exec.ExecuteStream(ctx, auth, req, opts)
+		if err != nil {
+			t.Fatalf("ExecuteStream returned error: %v", err)
+		}
+
+		// Collect all chunks
+		var chunks []string
+		for chunk := range stream {
+			if chunk.Err != nil {
+				t.Fatalf("stream error: %v", chunk.Err)
+			}
+			if len(chunk.Payload) > 0 {
+				chunks = append(chunks, string(chunk.Payload))
+			}
+		}
+
+		// Verify the output contains apply_patch instead of edit
+		foundApplyPatch := false
+		for _, chunk := range chunks {
+			if strings.Contains(chunk, "apply_patch") {
+				foundApplyPatch = true
+				break
+			}
+		}
+		if !foundApplyPatch {
+			t.Fatalf("expected normalizer to convert edit to apply_patch, got chunks: %v", chunks)
+		}
+	})
+
+	t.Run("gemini-3-flash-preview from==to emits error on invalid concatenated payload", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		invalidPayload := `{"operations":[{"type":"replace","text":"new"}]}{"operations":[{"type":"replace","text":"new2"}]}`
+
+		// Mock SSE server that returns an invalid concatenated payload (ambiguous)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/messages" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			// Invalid payload: missing required fields that make conversion unsafe
+			// Without "file" field, the normalizer cannot safely convert
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"edit\",\"input\":" + invalidPayload + "}}\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_stop\",\"index\":0}\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1}}\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n"))
+		}))
+		defer server.Close()
+
+		exec := NewClaudeExecutor(&config.Config{})
+		auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
+		payload := []byte(`{"model":"gemini-3-flash-preview","max_tokens":100,"stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"edit files"}]}]}`)
+		req := cliproxyexecutor.Request{Model: "gemini-3-flash-preview", Payload: payload}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude"), OriginalRequest: payload}
+
+		stream, err := exec.ExecuteStream(ctx, auth, req, opts)
+		if err != nil {
+			t.Fatalf("ExecuteStream returned error: %v", err)
+		}
+
+		// Collect all chunks and assert explicit error outcome.
+		var chunks []string
+		var hasErrorOutcome bool
+		for chunk := range stream {
+			if chunk.Err != nil {
+				t.Fatalf("unexpected stream error: %v", chunk.Err)
+			}
+			if len(chunk.Payload) > 0 {
+				payload := string(chunk.Payload)
+				chunks = append(chunks, payload)
+				if strings.Contains(payload, `"type":"error"`) && strings.Contains(payload, `"invalid_tool_input"`) {
+					hasErrorOutcome = true
+				}
+			}
+		}
+		if !hasErrorOutcome {
+			t.Fatalf("expected explicit parseable error outcome, got chunks: %v", chunks)
+		}
+		for _, chunk := range chunks {
+			if strings.Contains(chunk, invalidPayload) {
+				t.Fatalf("should not forward corrupted tool arguments")
+			}
+			if strings.Contains(chunk, `"type":"content_block_stop"`) && strings.Contains(chunk, `"index":0`) {
+				t.Fatalf("suppressed tool block should not emit content_block_stop after normalization error: %v", chunks)
+			}
+		}
+	})
+
+	t.Run("non-gemini-3-flash-preview model does not trigger normalizer", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Mock SSE server that returns an edit tool (but model is not gemini-3-flash-preview)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/messages" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			editPayload := `{"file":"a.txt","text":"old","operations":[{"type":"replace","text":"new"}]}`
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"edit\",\"input\":" + editPayload + "}}\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_stop\",\"index\":0}\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1}}\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n"))
+		}))
+		defer server.Close()
+
+		exec := NewClaudeExecutor(&config.Config{})
+		auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
+		// Use claude model instead of gemini-3-flash-preview
+		payload := []byte(`{"model":"claude-3-5-sonnet-20241022","max_tokens":100,"stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"edit files"}]}]}`)
+		req := cliproxyexecutor.Request{Model: "claude-3-5-sonnet-20241022", Payload: payload}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude"), OriginalRequest: payload}
+
+		stream, err := exec.ExecuteStream(ctx, auth, req, opts)
+		if err != nil {
+			t.Fatalf("ExecuteStream returned error: %v", err)
+		}
+
+		// Collect all chunks
+		var chunks []string
+		for chunk := range stream {
+			if chunk.Err != nil {
+				t.Fatalf("stream error: %v", chunk.Err)
+			}
+			if len(chunk.Payload) > 0 {
+				chunks = append(chunks, string(chunk.Payload))
+			}
+		}
+
+		// Verify the output does NOT contain apply_patch (normalizer should not trigger)
+		foundApplyPatch := false
+		for _, chunk := range chunks {
+			if strings.Contains(chunk, "apply_patch") {
+				foundApplyPatch = true
+				break
+			}
+		}
+		if foundApplyPatch {
+			t.Fatalf("normalizer should not trigger for non-gemini-3-flash-preview model")
+		}
+	})
+
+	t.Run("from!=to path does not trigger normalizer even with gemini model", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Mock SSE server (this path won't be hit because we test from!=to which goes through TranslateStream)
+		// But we still create a mock for completeness
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/messages" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1}}\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n"))
+		}))
+		defer server.Close()
+
+		exec := NewClaudeExecutor(&config.Config{})
+		auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
+		// Use gemini as source format (from != to)
+		payload := []byte(`{"model":"gemini-3-flash-preview","max_tokens":100,"stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"edit files"}]}]}`)
+		req := cliproxyexecutor.Request{Model: "gemini-3-flash-preview", Payload: payload}
+		// Source format is "gemini", target is "claude" - from != to
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("gemini"), OriginalRequest: payload}
+
+		stream, err := exec.ExecuteStream(ctx, auth, req, opts)
+		if err != nil {
+			t.Fatalf("ExecuteStream returned error: %v", err)
+		}
+
+		var chunks []string
+		for chunk := range stream {
+			if chunk.Err != nil {
+				t.Fatalf("stream error: %v", chunk.Err)
+			}
+			if len(chunk.Payload) > 0 {
+				chunks = append(chunks, string(chunk.Payload))
+			}
+		}
+		for _, chunk := range chunks {
+			if strings.Contains(chunk, "apply_patch") {
+				t.Fatalf("from!=to path should not apply from==to normalizer")
+			}
+			if strings.Contains(chunk, `"invalid_tool_input"`) {
+				t.Fatalf("from!=to path should not emit normalizer error outcomes")
+			}
+		}
+	})
+}
+
+func TestNormalizeToolUseLine_TargetsContentBlockFieldsOnly(t *testing.T) {
+	normalizer := NewToolCallNormalizer()
+	line := []byte(`data: {"type":"content_block_start","name":"outer","index":0,"content_block":{"type":"tool_use","id":"t1","name":"edit","input":{"file":"a.txt","text":"old","operations":[{"type":"replace","text":"new"}]}{"file":"b.txt","text":"x","operations":[{"type":"replace","text":"y"}]}}}`)
+
+	out, ok := normalizeToolUseLine(line, normalizer, map[int64]struct{}{})
+	if !ok {
+		t.Fatalf("line should be forwarded")
+	}
+	result := string(out)
+	if !strings.Contains(result, `"name":"outer"`) {
+		t.Fatalf("outer name should remain unchanged: %s", result)
+	}
+	if !strings.Contains(result, `"name":"apply_patch"`) {
+		t.Fatalf("tool name should be normalized to apply_patch: %s", result)
+	}
+}
+
+func TestNormalizeToolUseLine_SuppressesFollowupBlockEventsAfterError(t *testing.T) {
+	normalizer := NewToolCallNormalizer()
+	suppressed := map[int64]struct{}{}
+
+	errorLine := []byte(`data: {"type":"content_block_start","index":3,"content_block":{"type":"tool_use","id":"t3","name":"edit","input":{"operations":[{"type":"replace","text":"x"}]}{"operations":[{"type":"replace","text":"y"}]}}}`)
+	out, ok := normalizeToolUseLine(errorLine, normalizer, suppressed)
+	if !ok {
+		t.Fatalf("error event should still be forwarded")
+	}
+	if !strings.Contains(string(out), `"invalid_tool_input"`) {
+		t.Fatalf("expected invalid_tool_input event, got %s", out)
+	}
+
+	deltaLine := []byte(`data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"{}"}}`)
+	if out, ok = normalizeToolUseLine(deltaLine, normalizer, suppressed); ok || len(out) > 0 {
+		t.Fatalf("delta for suppressed block should be dropped")
+	}
+
+	stopLine := []byte(`data: {"type":"content_block_stop","index":3}`)
+	if out, ok = normalizeToolUseLine(stopLine, normalizer, suppressed); ok || len(out) > 0 {
+		t.Fatalf("stop for suppressed block should be dropped")
+	}
+	if _, exists := suppressed[3]; exists {
+		t.Fatalf("suppressed index should be cleared after stop")
+	}
+}

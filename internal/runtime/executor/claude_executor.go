@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"net/textproto"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -407,6 +409,13 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		return nil, err
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
+
+	// Check if normalizer should be applied (from == to and gemini-3-flash-preview model)
+	shouldNormalize := from == to && baseModel == "gemini-3-flash-preview"
+	var normalizer *ToolCallNormalizer
+	if shouldNormalize {
+		normalizer = NewToolCallNormalizer()
+	}
 	go func() {
 		defer close(out)
 		defer reporter.ensurePublished(ctx)
@@ -420,6 +429,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		if from == to {
 			scanner := bufio.NewScanner(decodedBody)
 			scanner.Buffer(nil, 52_428_800) // 50MB
+			suppressedToolBlocks := make(map[int64]struct{})
 			for scanner.Scan() {
 				line := scanner.Bytes()
 				appendAPIResponseChunk(ctx, e.cfg, line)
@@ -429,6 +439,16 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 					line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 				}
+
+				// Apply normalizer if needed (gemini-3-flash-preview model)
+				if normalizer != nil {
+					var forward bool
+					line, forward = normalizeToolUseLine(line, normalizer, suppressedToolBlocks)
+					if !forward {
+						continue
+					}
+				}
+
 				// Forward the line as-is to preserve SSE format
 				cloned := make([]byte, len(line)+1)
 				copy(cloned, line)
@@ -2044,4 +2064,349 @@ func injectSystemCacheControl(payload []byte) []byte {
 	}
 
 	return payload
+}
+
+// normalizeToolUseLine processes an SSE line and applies tool call normalization if needed.
+// For gemini-3-flash-preview model, converts malformed concatenated "edit" calls to "apply_patch".
+func normalizeToolUseLine(line []byte, normalizer *ToolCallNormalizer, suppressed map[int64]struct{}) ([]byte, bool) {
+	payload := jsonPayload(line)
+	if len(payload) == 0 {
+		return line, true
+	}
+
+	if len(suppressed) > 0 {
+		if index, ok := findTopLevelNumberField(payload, "index"); ok {
+			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+			if _, blocked := suppressed[index]; blocked {
+				if eventType == "content_block_stop" {
+					delete(suppressed, index)
+				}
+				if strings.HasPrefix(eventType, "content_block_") {
+					return nil, false
+				}
+			}
+		}
+	}
+	updated, err := normalizeToolUsePayload(payload, normalizer)
+	if err != nil {
+		if index, ok := findTopLevelNumberField(payload, "index"); ok {
+			suppressed[index] = struct{}{}
+		}
+		return buildToolNormalizationErrorLine(line, payload, err), true
+	}
+	if len(updated) == 0 {
+		return line, true
+	}
+	return rebuildSSEDataLine(line, updated), true
+}
+
+func normalizeToolUsePayload(payload []byte, normalizer *ToolCallNormalizer) ([]byte, error) {
+	contentBlockStart, contentBlockEnd, ok, err := findTopLevelObjectField(payload, "content_block")
+	if err != nil || !ok {
+		return nil, err
+	}
+	contentBlock := payload[contentBlockStart:contentBlockEnd]
+	contentType, _, _, ok, err := findTopLevelStringField(contentBlock, "type")
+	if err != nil {
+		return nil, err
+	}
+	if !ok || contentType != "tool_use" {
+		return nil, nil
+	}
+	toolName, nameStart, nameEnd, ok, err := findTopLevelStringField(contentBlock, "name")
+	if err != nil {
+		return nil, err
+	}
+	if !ok || toolName != "edit" {
+		return nil, nil
+	}
+	inputStart, inputEnd, ok, err := findTopLevelInputValueSpan(contentBlock)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	result := normalizer.NormalizeToolCall(toolName, bytes.TrimSpace(contentBlock[inputStart:inputEnd]))
+	if result.Err != nil {
+		return nil, result.Err
+	}
+	if result.ToolName == toolName && bytes.Equal(bytes.TrimSpace(contentBlock[inputStart:inputEnd]), result.Args) {
+		return nil, nil
+	}
+	nameJSON, err := json.Marshal(result.ToolName)
+	if err != nil {
+		return nil, err
+	}
+	updatedContentBlock, err := replaceSpans(contentBlock, []spanReplacement{
+		{start: nameStart, end: nameEnd, value: nameJSON},
+		{start: inputStart, end: inputEnd, value: result.Args},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return replaceSpans(payload, []spanReplacement{{start: contentBlockStart, end: contentBlockEnd, value: updatedContentBlock}})
+}
+
+type spanReplacement struct {
+	start int
+	end   int
+	value []byte
+}
+
+func replaceSpans(src []byte, replacements []spanReplacement) ([]byte, error) {
+	if len(replacements) == 0 {
+		return bytes.Clone(src), nil
+	}
+	sorted := append([]spanReplacement(nil), replacements...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].start > sorted[j].start
+	})
+	out := bytes.Clone(src)
+	prevStart := len(out) + 1
+	for i := range sorted {
+		r := sorted[i]
+		if r.start < 0 || r.end < r.start || r.end > len(out) {
+			return nil, fmt.Errorf("invalid replacement span [%d,%d)", r.start, r.end)
+		}
+		if r.end > prevStart {
+			return nil, fmt.Errorf("overlapping replacement spans")
+		}
+		out = append(append(out[:r.start], r.value...), out[r.end:]...)
+		prevStart = r.start
+	}
+	return out, nil
+}
+
+func buildToolNormalizationErrorLine(originalLine, payload []byte, normalizeErr error) []byte {
+	errorEvent := map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    "invalid_tool_input",
+			"message": fmt.Sprintf("tool normalization failed: %v", normalizeErr),
+		},
+	}
+	if index, ok := findTopLevelNumberField(payload, "index"); ok {
+		errorEvent["index"] = index
+	}
+	errorPayload, err := json.Marshal(errorEvent)
+	if err != nil {
+		return originalLine
+	}
+	return rebuildSSEDataLine(originalLine, errorPayload)
+}
+
+func rebuildSSEDataLine(originalLine, payload []byte) []byte {
+	trimmed := bytes.TrimSpace(originalLine)
+	if bytes.HasPrefix(trimmed, []byte("data:")) {
+		return append([]byte("data: "), payload...)
+	}
+	return payload
+}
+
+func findTopLevelObjectField(obj []byte, key string) (int, int, bool, error) {
+	start, end, ok, err := findTopLevelValueField(obj, key, true)
+	if err != nil || !ok {
+		return 0, 0, ok, err
+	}
+	if end <= start || obj[start] != '{' {
+		return 0, 0, false, fmt.Errorf("field %q is not object", key)
+	}
+	return start, end, true, nil
+}
+
+func findTopLevelInputValueSpan(obj []byte) (int, int, bool, error) {
+	return findTopLevelValueField(obj, "input", false)
+}
+
+func findTopLevelStringField(obj []byte, key string) (string, int, int, bool, error) {
+	start, end, ok, err := findTopLevelValueField(obj, key, true)
+	if err != nil || !ok {
+		return "", 0, 0, ok, err
+	}
+	if end <= start || obj[start] != '"' {
+		return "", 0, 0, false, fmt.Errorf("field %q is not string", key)
+	}
+	value, err := decodeJSONString(obj[start:end])
+	if err != nil {
+		return "", 0, 0, false, err
+	}
+	return value, start, end, true, nil
+}
+
+func findTopLevelNumberField(obj []byte, key string) (int64, bool) {
+	start, end, ok, err := findTopLevelValueField(obj, key, true)
+	if err != nil || !ok || end <= start {
+		return 0, false
+	}
+	r := gjson.ParseBytes(obj[start:end])
+	if !r.Exists() || r.Type != gjson.Number {
+		return 0, false
+	}
+	return r.Int(), true
+}
+
+func findTopLevelValueField(obj []byte, key string, strictValue bool) (int, int, bool, error) {
+	if len(obj) < 2 || obj[0] != '{' {
+		return 0, 0, false, fmt.Errorf("object must start with '{'")
+	}
+	i := 1
+	for i < len(obj) {
+		for i < len(obj) && (isJSONWhitespace(obj[i]) || obj[i] == ',') {
+			i++
+		}
+		if i >= len(obj) || obj[i] == '}' {
+			break
+		}
+		keyStart := i
+		keyEnd, err := scanJSONStringAt(obj, keyStart)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		field, err := decodeJSONString(obj[keyStart:keyEnd])
+		if err != nil {
+			return 0, 0, false, err
+		}
+		i = keyEnd
+		for i < len(obj) && isJSONWhitespace(obj[i]) {
+			i++
+		}
+		if i >= len(obj) || obj[i] != ':' {
+			return 0, 0, false, fmt.Errorf("missing ':' after field %q", field)
+		}
+		i++
+		for i < len(obj) && isJSONWhitespace(obj[i]) {
+			i++
+		}
+		if i >= len(obj) {
+			return 0, 0, false, fmt.Errorf("missing value for field %q", field)
+		}
+		valueStart := i
+		valueEnd, err := scanJSONValueSpan(obj, valueStart, field == "input" && !strictValue)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		if field == key {
+			return valueStart, valueEnd, true, nil
+		}
+		i = valueEnd
+	}
+	return 0, 0, false, nil
+}
+
+func scanJSONStringAt(data []byte, start int) (int, error) {
+	if start >= len(data) || data[start] != '"' {
+		return 0, fmt.Errorf("expected string at byte %d", start)
+	}
+	escaped := false
+	for i := start + 1; i < len(data); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if data[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if data[i] == '"' {
+			return i + 1, nil
+		}
+	}
+	return 0, fmt.Errorf("unterminated JSON string")
+}
+
+func decodeJSONString(raw []byte) (string, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", err
+	}
+	return s, nil
+}
+
+func scanJSONValueSpan(data []byte, start int, allowConcatenatedObjects bool) (int, error) {
+	if start >= len(data) {
+		return 0, fmt.Errorf("missing JSON value")
+	}
+	switch data[start] {
+	case '{':
+		end, err := scanJSONObjectAt(data, start)
+		if err != nil {
+			return 0, err
+		}
+		if allowConcatenatedObjects {
+			i := end
+			for i < len(data) {
+				for i < len(data) && isJSONWhitespace(data[i]) {
+					i++
+				}
+				if i >= len(data) || data[i] != '{' {
+					break
+				}
+				nextEnd, nextErr := scanJSONObjectAt(data, i)
+				if nextErr != nil {
+					return 0, nextErr
+				}
+				end = nextEnd
+				i = nextEnd
+			}
+		}
+		return end, nil
+	case '"':
+		return scanJSONStringAt(data, start)
+	case '[':
+		return scanJSONArrayAt(data, start)
+	default:
+		end := start
+		for end < len(data) {
+			c := data[end]
+			if c == ',' || c == '}' || c == ']' || isJSONWhitespace(c) {
+				break
+			}
+			end++
+		}
+		if end == start {
+			return 0, fmt.Errorf("invalid JSON value at byte %d", start)
+		}
+		return end, nil
+	}
+}
+
+func scanJSONArrayAt(data []byte, start int) (int, error) {
+	if start >= len(data) || data[start] != '[' {
+		return 0, fmt.Errorf("expected array start at byte %d", start)
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(data); i++ {
+		c := data[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString {
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return i + 1, nil
+			}
+			if depth < 0 {
+				return 0, fmt.Errorf("unexpected array close at byte %d", i)
+			}
+		}
+	}
+	return 0, fmt.Errorf("unterminated JSON array")
 }
