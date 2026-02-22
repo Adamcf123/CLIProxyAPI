@@ -15,16 +15,6 @@ Keep `edit` normalization as the single canonical conversion path to `apply_patc
 **Spec**: `../2026-02-14-gemini-tooluse-normalization-design/bdd-specs.md`  
 **Scenario**: Scenario 3: Keep edit conversion behavior unchanged
 
-## Scenario-Test Mapping
-
-- Scenario 3 Given/When/Then -> `TestNormalizeToolUseLine_EditUsesCanonicalApplyPatchRoute`
-- Converter parity verification -> `TestToolCallNormalizer_Scenario1_ConvertConcatenatedEdits`
-- Required assertions:
-  - edit tool is converted to apply_patch only via `ToolCallNormalizer`
-  - `patchText` content is deterministic and includes all expected edits in stable order
-  - path safety and operation validation behavior remains unchanged
-  - generic non-edit splitter does not process edit payloads
-
 ## Files to Modify/Create
 
 - Modify: `internal/runtime/executor/claude_executor.go`
@@ -38,11 +28,9 @@ Keep `edit` normalization as the single canonical conversion path to `apply_patc
 - Confirm Scenario 3 assertions target behavior parity for edit conversion.
 - Confirm RED failure is contract regression, not fixture/setup issues.
 - Confirm assertions cover tool name, patchText presence, and deterministic content ordering.
-- Confirm assertions enforce canonical single-path routing for edit normalization.
 
 ### RED
 - Add failing regression tests proving edit behavior drift after introducing generic non-edit split logic.
-- RED failure signature must be semantic (edit route bypass, non-deterministic patchText, or safety-check drift).
 
 ### GREEN
 - Adjust routing between generic splitter and edit normalizer so edit stays authoritative.

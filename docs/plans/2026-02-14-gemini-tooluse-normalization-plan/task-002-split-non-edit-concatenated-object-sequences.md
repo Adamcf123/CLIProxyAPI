@@ -17,16 +17,6 @@ Implement deterministic splitting for non-`edit` `tool_use` payloads when the re
 **Spec**: `../2026-02-14-gemini-tooluse-normalization-design/bdd-specs.md`  
 **Scenario**: Scenario 2: Split concatenated non-edit objects into independent calls
 
-## Scenario-Test Mapping
-
-- Scenario 2 Given/When/Then -> `TestNormalizeToolUseLine_NonEditConcatenatedObjectsSplit`
-- Stream sequence verification -> `TestClaudeExecutorFromEqualsToNormalization/non-edit concatenated payload split`
-- Required assertions:
-  - exact split object count equals top-level object count
-  - each emitted tool block contains exactly one JSON object input
-  - emitted object order equals original order
-  - deterministic index/id allocation without collision
-
 ## Files to Modify/Create
 
 - Modify: `internal/runtime/executor/claude_executor.go`
@@ -39,12 +29,10 @@ Implement deterministic splitting for non-`edit` `tool_use` payloads when the re
 - Confirm split behavior maps only to Scenario 2 and does not alter edit strategy.
 - Confirm assertions verify object count, order, and one-object-per-call invariants.
 - Confirm no weak assertion patterns (`A || B`) in expected stream output.
-- Confirm index/id assertions bind to executor stream state source.
 
 ### RED
 - Add failing tests for non-edit concatenated payloads requiring multi-call split output.
 - Capture expected failure location in guarded stream normalization.
-- RED failure signature must be semantic (missing split, wrong order, one-call merge, or index/id drift).
 
 ### GREEN
 - Implement split logic using top-level object sequence parsing with deterministic ordering.
