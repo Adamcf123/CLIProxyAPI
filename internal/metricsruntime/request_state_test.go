@@ -248,22 +248,28 @@ func TestPrintSummary_OnlyPrintsE2ESummaryLines(t *testing.T) {
 	out, _ := io.ReadAll(r)
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 summary lines, got %d: %q", len(lines), string(out))
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 summary lines, got %d: %q", len(lines), string(out))
 	}
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "metrics_summary ") {
 			t.Fatalf("expected metrics_summary prefix, got %q", line)
 		}
 	}
-	if lines[0] != "metrics_summary request_count=0" {
-		t.Fatalf("unexpected request_count line: %q", lines[0])
+	if lines[0] != "metrics_summary provider=openai" {
+		t.Fatalf("unexpected provider line: %q", lines[0])
 	}
-	if lines[1] != "metrics_summary time_window=10m" {
-		t.Fatalf("unexpected time_window line: %q", lines[1])
+	if lines[1] != "metrics_summary model=gpt-5.2" {
+		t.Fatalf("unexpected model line: %q", lines[1])
 	}
-	if lines[2] != "metrics_summary tps_avg=--" {
-		t.Fatalf("unexpected tps_avg line: %q", lines[2])
+	if lines[2] != "metrics_summary request_count=0" {
+		t.Fatalf("unexpected request_count line: %q", lines[2])
+	}
+	if lines[3] != "metrics_summary time_window=10m" {
+		t.Fatalf("unexpected time_window line: %q", lines[3])
+	}
+	if lines[4] != "metrics_summary tps_avg=--" {
+		t.Fatalf("unexpected tps_avg line: %q", lines[4])
 	}
 }
 

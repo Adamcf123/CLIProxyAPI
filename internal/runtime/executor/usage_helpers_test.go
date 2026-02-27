@@ -65,6 +65,42 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	}
 }
 
+func TestParseClaudeUsage_EphemeralCacheTokens(t *testing.T) {
+	data := []byte(`{"usage":{"input_tokens":100,"output_tokens":50,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":50},"cache_read_input_tokens":0}}`)
+	detail := parseClaudeUsage(data)
+	if detail.InputTokens != 100 {
+		t.Fatalf("input tokens = %d, want %d", detail.InputTokens, 100)
+	}
+	if detail.OutputTokens != 50 {
+		t.Fatalf("output tokens = %d, want %d", detail.OutputTokens, 50)
+	}
+	if detail.CachedTokens != 150 {
+		t.Fatalf("cached tokens = %d, want %d", detail.CachedTokens, 150)
+	}
+}
+
+func TestParseClaudeUsage_ThinkingTokens(t *testing.T) {
+	data := []byte(`{"usage":{"input_tokens":100,"output_tokens":30,"thinking_tokens":200}}`)
+	detail := parseClaudeUsage(data)
+	if detail.ReasoningTokens != 200 {
+		t.Fatalf("reasoning tokens = %d, want %d", detail.ReasoningTokens, 200)
+	}
+	if detail.TotalTokens != 330 {
+		t.Fatalf("total tokens = %d, want %d (input + output + reasoning)", detail.TotalTokens, 330)
+	}
+}
+
+func TestParseClaudeStreamUsage_EphemeralCacheTokens(t *testing.T) {
+	line := []byte(`data: {"type":"message_delta","usage":{"output_tokens":50,"cache_creation":{"ephemeral_5m_input_tokens":80}}}`)
+	detail, ok := parseClaudeStreamUsage(line)
+	if !ok {
+		t.Fatal("parseClaudeStreamUsage returned false, want true")
+	}
+	if detail.CachedTokens != 80 {
+		t.Fatalf("cached tokens = %d, want %d", detail.CachedTokens, 80)
+	}
+}
+
 func TestUsageReporter_Publish_SkipsAllZeroTokensWhenNotFailed(t *testing.T) {
 	ctx := context.Background()
 	reporter := newUsageReporter(ctx, "provider", "model", nil)

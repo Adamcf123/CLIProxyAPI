@@ -36,63 +36,25 @@ type Plugin interface {
 	HandleUsage(ctx context.Context, record Record)
 }
 
-type queueItem struct {
-	ctx    context.Context
-	record Record
-}
-
-// Manager maintains a queue of usage records and delivers them to registered plugins.
+// Manager delivers usage records to registered plugins synchronously.
+// Synchronous dispatch ensures that RequestState metrics (e.g. WindowStatsE2E)
+// are updated before the handler's defer fires PrintSummary.
 type Manager struct {
-	once     sync.Once
-	stopOnce sync.Once
-	cancel   context.CancelFunc
-
-	mu     sync.Mutex
-	cond   *sync.Cond
-	queue  []queueItem
-	closed bool
-
 	pluginsMu sync.RWMutex
 	plugins   []Plugin
 }
 
-// NewManager constructs a manager with a buffered queue.
-func NewManager(buffer int) *Manager {
-	m := &Manager{}
-	m.cond = sync.NewCond(&m.mu)
-	return m
+// NewManager constructs a Manager. The buffer parameter is kept for API
+// compatibility but is unused (dispatch is now synchronous).
+func NewManager(_ int) *Manager {
+	return &Manager{}
 }
 
-// Start launches the background dispatcher. Calling Start multiple times is safe.
-func (m *Manager) Start(ctx context.Context) {
-	if m == nil {
-		return
-	}
-	m.once.Do(func() {
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		var workerCtx context.Context
-		workerCtx, m.cancel = context.WithCancel(ctx)
-		go m.run(workerCtx)
-	})
-}
+// Start is a no-op kept for API compatibility.
+func (m *Manager) Start(_ context.Context) {}
 
-// Stop stops the dispatcher and drains the queue.
-func (m *Manager) Stop() {
-	if m == nil {
-		return
-	}
-	m.stopOnce.Do(func() {
-		if m.cancel != nil {
-			m.cancel()
-		}
-		m.mu.Lock()
-		m.closed = true
-		m.mu.Unlock()
-		m.cond.Broadcast()
-	})
-}
+// Stop is a no-op kept for API compatibility.
+func (m *Manager) Stop() {}
 
 // Register appends a plugin to the delivery list.
 func (m *Manager) Register(plugin Plugin) {
@@ -104,54 +66,20 @@ func (m *Manager) Register(plugin Plugin) {
 	m.pluginsMu.Unlock()
 }
 
-// Publish enqueues a usage record for processing. If no plugin is registered
-// the record will be discarded downstream.
+// Publish dispatches a usage record to all registered plugins synchronously.
 func (m *Manager) Publish(ctx context.Context, record Record) {
 	if m == nil {
 		return
 	}
-	// ensure worker is running even if Start was not called explicitly
-	m.Start(context.Background())
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return
-	}
-	m.queue = append(m.queue, queueItem{ctx: ctx, record: record})
-	m.mu.Unlock()
-	m.cond.Signal()
-}
-
-func (m *Manager) run(ctx context.Context) {
-	for {
-		m.mu.Lock()
-		for !m.closed && len(m.queue) == 0 {
-			m.cond.Wait()
-		}
-		if len(m.queue) == 0 && m.closed {
-			m.mu.Unlock()
-			return
-		}
-		item := m.queue[0]
-		m.queue = m.queue[1:]
-		m.mu.Unlock()
-		m.dispatch(item)
-	}
-}
-
-func (m *Manager) dispatch(item queueItem) {
 	m.pluginsMu.RLock()
 	plugins := make([]Plugin, len(m.plugins))
 	copy(plugins, m.plugins)
 	m.pluginsMu.RUnlock()
-	if len(plugins) == 0 {
-		return
-	}
 	for _, plugin := range plugins {
 		if plugin == nil {
 			continue
 		}
-		safeInvoke(plugin, item.ctx, item.record)
+		safeInvoke(plugin, ctx, record)
 	}
 }
 
@@ -164,7 +92,7 @@ func safeInvoke(plugin Plugin, ctx context.Context, record Record) {
 	plugin.HandleUsage(ctx, record)
 }
 
-var defaultManager = NewManager(512)
+var defaultManager = NewManager(0)
 
 // DefaultManager returns the global usage manager instance.
 func DefaultManager() *Manager { return defaultManager }
@@ -175,8 +103,8 @@ func RegisterPlugin(plugin Plugin) { DefaultManager().Register(plugin) }
 // PublishRecord publishes a record using the default manager.
 func PublishRecord(ctx context.Context, record Record) { DefaultManager().Publish(ctx, record) }
 
-// StartDefault starts the default manager's dispatcher.
-func StartDefault(ctx context.Context) { DefaultManager().Start(ctx) }
+// StartDefault is a no-op kept for API compatibility.
+func StartDefault(_ context.Context) {}
 
-// StopDefault stops the default manager's dispatcher.
-func StopDefault() { DefaultManager().Stop() }
+// StopDefault is a no-op kept for API compatibility.
+func StopDefault() {}

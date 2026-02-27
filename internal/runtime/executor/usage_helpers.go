@@ -291,7 +291,15 @@ func parseClaudeUsage(data []byte) usage.Detail {
 		// fall back to creation tokens when read tokens are absent
 		detail.CachedTokens = usageNode.Get("cache_creation_input_tokens").Int()
 	}
-	detail.TotalTokens = detail.InputTokens + detail.OutputTokens
+	// Ephemeral cache tokens
+	ephemeral5m := usageNode.Get("cache_creation.ephemeral_5m_input_tokens").Int()
+	ephemeral1h := usageNode.Get("cache_creation.ephemeral_1h_input_tokens").Int()
+	detail.CachedTokens += ephemeral5m + ephemeral1h
+
+	// Thinking/reasoning tokens
+	detail.ReasoningTokens = usageNode.Get("thinking_tokens").Int()
+
+	detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
 	return detail
 }
 
@@ -312,7 +320,15 @@ func parseClaudeStreamUsage(line []byte) (usage.Detail, bool) {
 	if detail.CachedTokens == 0 {
 		detail.CachedTokens = usageNode.Get("cache_creation_input_tokens").Int()
 	}
-	detail.TotalTokens = detail.InputTokens + detail.OutputTokens
+	// Ephemeral cache tokens
+	ephemeral5m := usageNode.Get("cache_creation.ephemeral_5m_input_tokens").Int()
+	ephemeral1h := usageNode.Get("cache_creation.ephemeral_1h_input_tokens").Int()
+	detail.CachedTokens += ephemeral5m + ephemeral1h
+
+	// Thinking/reasoning tokens
+	detail.ReasoningTokens = usageNode.Get("thinking_tokens").Int()
+
+	detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
 	return detail, true
 }
 

@@ -57,6 +57,9 @@ func PrintSummary(state *RequestState) {
 	}
 	snap := state.Snapshot()
 
+	_, _ = fmt.Fprintf(os.Stderr, "metrics_summary provider=%s\n", snap.Provider)
+	_, _ = fmt.Fprintf(os.Stderr, "metrics_summary model=%s\n", snap.Model)
+
 	windowStatsE2E := snap.WindowStatsE2E
 	_, _ = fmt.Fprintf(os.Stderr, "metrics_summary request_count=%d\n", windowStatsE2E.Count)
 	_, _ = fmt.Fprintf(os.Stderr, "metrics_summary time_window=%s\n", metrics.E2EWindowLabel)

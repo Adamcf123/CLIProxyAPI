@@ -158,6 +158,89 @@ func TestMetricsPlugin_HandleUsage_CanceledPersists499AndNilErrorInfo(t *testing
 	}
 }
 
+// TestHandleUsage_E2EWithZeroOutputButReasoningTokens verifies that E2E stats
+// are recorded when outputTokens=0 but reasoningTokens>0 (i.e. generatedTokens>0).
+// RED: current code guards E2E on outputTokens>0 so this must FAIL.
+func TestHandleUsage_E2EWithZeroOutputButReasoningTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	origEnqueue := enqueueMetricRecord
+	defer func() { enqueueMetricRecord = origEnqueue }()
+	enqueueMetricRecord = func(r metricspersist.MetricRecord) {}
+
+	p := NewMetricsPlugin(nil)
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	state := NewRequestState(false, "claude-3.5")
+	state.SetProvider("anthropic")
+	state.SetModel("claude-3.5")
+	state.StartedAt = time.Now().Add(-1 * time.Second)
+	state.SetStatusCode(200)
+	AttachRequestState(ginCtx, state)
+
+	ctx := logging.WithRequestID(context.Background(), "req_e2e_reasoning")
+	ctx = context.WithValue(ctx, "gin", ginCtx)
+	record := usage.Record{
+		Provider: "anthropic",
+		Model:    "claude-3.5",
+		Detail: usage.Detail{
+			InputTokens:     50,
+			OutputTokens:    0,
+			ReasoningTokens: 20,
+			TotalTokens:     70,
+		},
+	}
+
+	p.HandleUsage(ctx, record)
+
+	snap := state.Snapshot()
+	if snap.WindowStatsE2E.Count <= 0 {
+		t.Fatalf("expected WindowStatsE2E.Count > 0 (generatedTokens=20), got %d", snap.WindowStatsE2E.Count)
+	}
+}
+
+// TestHandleUsage_E2ENoOutputNoGenerated verifies that E2E stats are NOT
+// recorded when both outputTokens and reasoningTokens are 0 (generatedTokens=0).
+func TestHandleUsage_E2ENoOutputNoGenerated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	origEnqueue := enqueueMetricRecord
+	defer func() { enqueueMetricRecord = origEnqueue }()
+	enqueueMetricRecord = func(r metricspersist.MetricRecord) {}
+
+	p := NewMetricsPlugin(nil)
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	state := NewRequestState(false, "claude-3.5")
+	state.SetProvider("anthropic")
+	state.SetModel("claude-3.5")
+	state.StartedAt = time.Now().Add(-1 * time.Second)
+	state.SetStatusCode(200)
+	AttachRequestState(ginCtx, state)
+
+	ctx := logging.WithRequestID(context.Background(), "req_e2e_nogen")
+	ctx = context.WithValue(ctx, "gin", ginCtx)
+	record := usage.Record{
+		Provider: "anthropic",
+		Model:    "claude-3.5",
+		Detail: usage.Detail{
+			InputTokens:     50,
+			OutputTokens:    0,
+			ReasoningTokens: 0,
+			TotalTokens:     50,
+		},
+	}
+
+	p.HandleUsage(ctx, record)
+
+	snap := state.Snapshot()
+	if snap.WindowStatsE2E.Count != 0 {
+		t.Fatalf("expected WindowStatsE2E.Count == 0 (no generated tokens), got %d", snap.WindowStatsE2E.Count)
+	}
+}
+
 func TestMetricsPlugin_HandleUsage_PopulatesCollectorWindowStatsForNonCanceled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -198,12 +281,14 @@ func TestMetricsPlugin_HandleUsage_PopulatesCollectorWindowStatsForNonCanceled(t
 		}
 	})
 
-	t.Run("state provider/model overrides record for collector key", func(t *testing.T) {
+	t.Run("record provider/model overrides state for collector key", func(t *testing.T) {
 		p := NewMetricsPlugin(nil)
 
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 		state := NewRequestState(false, "gpt-5.2")
+		// Handler pre-sets provider/model (e.g. claude code handler sets "claude").
+		// The record from the actual executor should always win.
 		state.SetProvider("anthropic")
 		state.SetModel("claude-3.5")
 		state.StartedAt = time.Now().Add(-1 * time.Second)
@@ -223,19 +308,29 @@ func TestMetricsPlugin_HandleUsage_PopulatesCollectorWindowStatsForNonCanceled(t
 		p.HandleUsage(ctx, record)
 
 		snap := state.Snapshot()
-		keyAligned := metrics.MetricKey{Provider: snap.Provider, Model: snap.Model, Streaming: snap.Streaming}
-		wsAligned, okAligned := p.collector.GetWindowStats(keyAligned)
-		if !okAligned {
-			t.Fatalf("expected aligned collector GetWindowStats ok=true")
+		// After HandleUsage the state should reflect the record's actual provider/model.
+		if snap.Provider != record.Provider {
+			t.Fatalf("expected state.Provider=%q after HandleUsage, got %q", record.Provider, snap.Provider)
 		}
-		if wsAligned.Count <= 0 {
-			t.Fatalf("expected aligned collector window count > 0, got %d", wsAligned.Count)
+		if snap.Model != record.Model {
+			t.Fatalf("expected state.Model=%q after HandleUsage, got %q", record.Model, snap.Model)
 		}
 
+		// Collector key must be based on the record (actual executor) values.
 		keyRecord := metrics.MetricKey{Provider: record.Provider, Model: record.Model, Streaming: snap.Streaming}
 		wsRecord, okRecord := p.collector.GetWindowStats(keyRecord)
-		if okRecord && wsRecord.Count > 0 {
-			t.Fatalf("expected record key to not be used for aggregation, got ok=%v count=%d", okRecord, wsRecord.Count)
+		if !okRecord {
+			t.Fatalf("expected record-key collector GetWindowStats ok=true")
+		}
+		if wsRecord.Count <= 0 {
+			t.Fatalf("expected record-key collector window count > 0, got %d", wsRecord.Count)
+		}
+
+		// The old state key (anthropic/claude-3.5) should NOT have been used.
+		keyOldState := metrics.MetricKey{Provider: "anthropic", Model: "claude-3.5", Streaming: snap.Streaming}
+		wsOld, okOld := p.collector.GetWindowStats(keyOldState)
+		if okOld && wsOld.Count > 0 {
+			t.Fatalf("expected old-state key to not be used for aggregation, got ok=%v count=%d", okOld, wsOld.Count)
 		}
 	})
 }

@@ -75,6 +75,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	inputTokens := record.Detail.InputTokens
 	outputTokens := record.Detail.OutputTokens
 	totalTokens := record.Detail.TotalTokens
+	generatedTokens := int(outputTokens) + int(record.Detail.ReasoningTokens)
 
 	// Detect "usage missing": all tokens are 0 and request did not fail.
 	usageMissing := inputTokens == 0 && outputTokens == 0 && totalTokens == 0 && !record.Failed
@@ -125,13 +126,15 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		state, _ = GetRequestState(ginCtx)
 		if state != nil {
 			snap = state.Snapshot()
-			// display.go always reads provider/model from RequestStateSnapshot. When upstream
-			// didn't set them, backfill from the usage record so metrics_summary stays usable.
-			if strings.TrimSpace(snap.Provider) == "" && strings.TrimSpace(record.Provider) != "" {
+			// display.go reads provider/model from RequestStateSnapshot. Always prefer the
+			// usage record's values because they reflect the actual executor that handled the
+			// request, which may differ from the handler's initial guess (e.g. a request
+			// arriving at /v1/messages with a non-Claude model that gets routed to codex).
+			if strings.TrimSpace(record.Provider) != "" {
 				state.SetProvider(record.Provider)
 				snap.Provider = record.Provider
 			}
-			if strings.TrimSpace(snap.Model) == "" && strings.TrimSpace(record.Model) != "" {
+			if strings.TrimSpace(record.Model) != "" {
 				state.SetModel(record.Model)
 				snap.Model = record.Model
 			}
@@ -258,7 +261,7 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 
 	// Compute end-to-end rates (based on output_tokens / total duration). This is a separate
 	// signal from streaming token-timing TPS/TPOT and is expected to be available more often.
-	if state != nil && hasKey && !isCanceled && outputTokens > 0 && durationMs > 0 {
+	if state != nil && hasKey && !isCanceled && generatedTokens > 0 && durationMs > 0 {
 		statusCode := int64(0)
 		if statusCodePtr != nil {
 			statusCode = *statusCodePtr
@@ -267,9 +270,9 @@ func (p *MetricsPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		if !isFailure {
 			secs := float64(durationMs) / 1000.0
 			if secs > 0 {
-				v := float64(outputTokens) / secs
+				v := float64(generatedTokens) / secs
 				tpse2e := &v
-				w := secs / float64(outputTokens)
+				w := secs / float64(generatedTokens)
 				tpote2e := &w
 				state.SetE2EMetrics(tpse2e, tpote2e)
 
