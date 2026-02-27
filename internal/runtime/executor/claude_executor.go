@@ -107,12 +107,12 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
-	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx))
+	from := opts.SourceFormat
+	to := sdktranslator.FromString("claude")
+	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx)) && from == to
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
 	defer reporter.finalize(ctx, &err)
-	from := opts.SourceFormat
-	to := sdktranslator.FromString("claude")
 	// Use streaming translation to preserve function calling, except for claude.
 	stream := from != to
 	var bodyForTranslation, bodyForUpstream []byte
@@ -188,7 +188,8 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		}
 		for key, vals := range ginHeaders {
 			switch http.CanonicalHeaderKey(key) {
-			case "Content-Length", "Host", "Connection", "Transfer-Encoding":
+			case "Content-Length", "Host", "Connection", "Transfer-Encoding",
+				"Authorization", "X-Api-Key", "X-Goog-Api-Key":
 				continue
 			}
 			for _, v := range vals {
@@ -316,12 +317,12 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
-	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx))
+	from := opts.SourceFormat
+	to := sdktranslator.FromString("claude")
+	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx)) && from == to
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
 	defer reporter.trackFailure(ctx, &err)
-	from := opts.SourceFormat
-	to := sdktranslator.FromString("claude")
 	var bodyForTranslation, bodyForUpstream []byte
 	var extraBetas []string
 	if !nativePassthrough {
@@ -392,7 +393,8 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		}
 		for key, vals := range ginHeaders {
 			switch http.CanonicalHeaderKey(key) {
-			case "Content-Length", "Host", "Connection", "Transfer-Encoding":
+			case "Content-Length", "Host", "Connection", "Transfer-Encoding",
+				"Authorization", "X-Api-Key", "X-Goog-Api-Key":
 				continue
 			}
 			for _, v := range vals {
@@ -541,10 +543,10 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		baseURL = "https://api.anthropic.com"
 	}
 
-	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx))
-
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("claude")
+	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx)) && from == to
+
 	var body []byte
 	var extraBetas []string
 	if !nativePassthrough {
@@ -583,7 +585,8 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		}
 		for key, vals := range ginHeaders {
 			switch http.CanonicalHeaderKey(key) {
-			case "Content-Length", "Host", "Connection", "Transfer-Encoding":
+			case "Content-Length", "Host", "Connection", "Transfer-Encoding",
+				"Authorization", "X-Api-Key", "X-Goog-Api-Key":
 				continue
 			}
 			for _, v := range vals {

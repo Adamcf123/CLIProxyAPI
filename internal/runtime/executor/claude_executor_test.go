@@ -16,6 +16,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -1514,6 +1515,80 @@ func TestClaudeExecutor_NativePassthrough_StreamResponseUnchanged(t *testing.T) 
 }
 
 // Scenario E: non-claude-cli UA + OAuth token → proxy_ prefix applied normally (regression guard).
+// Security: X-Api-Key and Authorization from client must not reach upstream.
+func TestClaudeExecutor_NativePassthrough_ClientCredentialHeadersNotLeaked(t *testing.T) {
+	var capturedXApiKey, capturedAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedXApiKey = r.Header.Get("X-Api-Key")
+		capturedAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-upstreamtoken",
+		"base_url": server.URL,
+	}}
+	// Client authenticates to the proxy using X-Api-Key (proxy credential, must not leak).
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request, _ = http.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ginCtx.Request.Header.Set("User-Agent", "claude-cli/2.1.62 (external, sdk-cli)")
+	ginCtx.Request.Header.Set("X-Api-Key", "proxy-client-secret")
+	ginCtx.Request.Header.Set("Authorization", "Bearer proxy-client-secret")
+	ctx := context.WithValue(context.Background(), "gin", ginCtx)
+
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if capturedXApiKey == "proxy-client-secret" {
+		t.Fatal("X-Api-Key proxy credential leaked to upstream")
+	}
+	// Upstream Authorization must be the upstream token, not the proxy credential.
+	if capturedAuthorization != "Bearer sk-ant-oat01-upstreamtoken" {
+		t.Fatalf("expected upstream Authorization=Bearer sk-ant-oat01-upstreamtoken, got %q", capturedAuthorization)
+	}
+}
+
+// Security: non-claude source format must not trigger nativePassthrough even with claude-cli UA + OAuth token.
+func TestClaudeExecutor_NativePassthrough_NonClaudeSourceFormatTranslated(t *testing.T) {
+	var capturedAnthropicVersion string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAnthropicVersion = r.Header.Get("Anthropic-Version")
+		_, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	// makeGinCtxWithUA intentionally omits Anthropic-Version from the client request.
+	// applyClaudeHeaders (non-passthrough path) always injects "2023-06-01".
+	// nativePassthrough merely forwards client headers, so Anthropic-Version would be absent.
+	ctx := makeGinCtxWithUA("claude-cli/2.1.62 (external, sdk-cli)", "")
+	openAIPayload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: openAIPayload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai")}
+
+	if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	// applyClaudeHeaders sets Anthropic-Version: 2023-06-01; nativePassthrough would leave it
+	// absent (client didn't send it).  Presence of the header proves the non-passthrough path ran.
+	if capturedAnthropicVersion != "2023-06-01" {
+		t.Fatalf("expected upstream Anthropic-Version=2023-06-01 (applyClaudeHeaders ran), got %q — nativePassthrough may have fired incorrectly", capturedAnthropicVersion)
+	}
+}
+
 func TestClaudeExecutor_NativePassthrough_ThirdPartyClientUnaffected(t *testing.T) {
 	var toolNames []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1549,5 +1624,191 @@ func TestClaudeExecutor_NativePassthrough_ThirdPartyClientUnaffected(t *testing.
 	}
 	if !found {
 		t.Fatalf("expected 'proxy_Read' in upstream request for non-claude-cli UA, got %v", toolNames)
+	}
+}
+
+// Security: X-Goog-Api-Key used as proxy credential must not be forwarded to upstream in nativePassthrough.
+// provider.go accepts X-Goog-Api-Key as a valid proxy auth source; this test ensures the header
+// is scrubbed from outgoing upstream requests just like Authorization and X-Api-Key are.
+func TestClaudeExecutor_NativePassthrough_XGoogApiKeyNotLeaked(t *testing.T) {
+	const proxySecret = "proxy-goog-secret"
+	const upstreamToken = "sk-ant-oat01-upstreamtoken"
+
+	t.Run("Execute", func(t *testing.T) {
+		var capturedGoog string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedGoog = r.Header.Get("X-Goog-Api-Key")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+		}))
+		defer server.Close()
+
+		exec := NewClaudeExecutor(&config.Config{})
+		auth := &cliproxyauth.Auth{Attributes: map[string]string{
+			"api_key":  upstreamToken,
+			"base_url": server.URL,
+		}}
+		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ginCtx.Request, _ = http.NewRequest(http.MethodPost, "/v1/messages", nil)
+		ginCtx.Request.Header.Set("User-Agent", "claude-cli/2.1.62 (external, sdk-cli)")
+		ginCtx.Request.Header.Set("X-Goog-Api-Key", proxySecret)
+		ctx := context.WithValue(context.Background(), "gin", ginCtx)
+
+		payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+		req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+		if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+			t.Fatalf("Execute returned error: %v", err)
+		}
+		if capturedGoog == proxySecret {
+			t.Fatal("X-Goog-Api-Key proxy credential leaked to upstream via Execute")
+		}
+	})
+
+	t.Run("ExecuteStream", func(t *testing.T) {
+		var capturedGoog string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedGoog = r.Header.Get("X-Goog-Api-Key")
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("data: {\"type\":\"message_stop\"}\n\n"))
+		}))
+		defer server.Close()
+
+		exec := NewClaudeExecutor(&config.Config{})
+		auth := &cliproxyauth.Auth{Attributes: map[string]string{
+			"api_key":  upstreamToken,
+			"base_url": server.URL,
+		}}
+		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ginCtx.Request, _ = http.NewRequest(http.MethodPost, "/v1/messages", nil)
+		ginCtx.Request.Header.Set("User-Agent", "claude-cli/2.1.62 (external, sdk-cli)")
+		ginCtx.Request.Header.Set("X-Goog-Api-Key", proxySecret)
+		ctx := context.WithValue(context.Background(), "gin", ginCtx)
+
+		payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"stream":true}`)
+		req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+		result, err := exec.ExecuteStream(ctx, auth, req, opts)
+		if err != nil {
+			t.Fatalf("ExecuteStream returned error: %v", err)
+		}
+		// Drain the stream.
+		for range result.Chunks {
+		}
+		if capturedGoog == proxySecret {
+			t.Fatal("X-Goog-Api-Key proxy credential leaked to upstream via ExecuteStream")
+		}
+	})
+
+	t.Run("CountTokens", func(t *testing.T) {
+		var capturedGoog string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedGoog = r.Header.Get("X-Goog-Api-Key")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"input_tokens":10}`))
+		}))
+		defer server.Close()
+
+		exec := NewClaudeExecutor(&config.Config{})
+		auth := &cliproxyauth.Auth{Attributes: map[string]string{
+			"api_key":  upstreamToken,
+			"base_url": server.URL,
+		}}
+		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ginCtx.Request, _ = http.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+		ginCtx.Request.Header.Set("User-Agent", "claude-cli/2.1.62 (external, sdk-cli)")
+		ginCtx.Request.Header.Set("X-Goog-Api-Key", proxySecret)
+		ctx := context.WithValue(context.Background(), "gin", ginCtx)
+
+		payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+		req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+		if _, err := exec.CountTokens(ctx, auth, req, opts); err != nil {
+			t.Fatalf("CountTokens returned error: %v", err)
+		}
+		if capturedGoog == proxySecret {
+			t.Fatal("X-Goog-Api-Key proxy credential leaked to upstream via CountTokens")
+		}
+	})
+}
+
+// Success criterion 5: 指标采集在 nativePassthrough 路径（Execute）继续工作。
+// nativePassthrough 不绕过 reporter.publish；parseClaudeUsage 解析上游响应 usage 字段。
+func TestClaudeExecutor_NativePassthrough_UsageRecordPublished_Execute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}`))
+	}))
+	defer server.Close()
+
+	prev := publishUsageRecord
+	defer func() { publishUsageRecord = prev }()
+	var got usage.Record
+	publishUsageRecord = func(_ context.Context, record usage.Record) { got = record }
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	ctx := makeGinCtxWithUA("claude-cli/2.1.62 (external, sdk-cli)", "")
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if got.Detail.InputTokens != 5 {
+		t.Errorf("expected InputTokens=5, got %d — usage record not published or wrong in nativePassthrough Execute path", got.Detail.InputTokens)
+	}
+	if got.Detail.OutputTokens != 3 {
+		t.Errorf("expected OutputTokens=3, got %d — usage record not published or wrong in nativePassthrough Execute path", got.Detail.OutputTokens)
+	}
+}
+
+// Success criterion 5: 指标采集在 nativePassthrough 路径（ExecuteStream）继续工作。
+// parseClaudeStreamUsage 解析 SSE 流中含 usage 字段的行。
+func TestClaudeExecutor_NativePassthrough_UsageRecordPublished_ExecuteStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// message_delta 事件携带顶层 usage 字段，parseClaudeStreamUsage 从中提取 token 数。
+		_, _ = w.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":7,\"output_tokens\":4}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer server.Close()
+
+	prev := publishUsageRecord
+	defer func() { publishUsageRecord = prev }()
+	var got usage.Record
+	publishUsageRecord = func(_ context.Context, record usage.Record) { got = record }
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	ctx := makeGinCtxWithUA("claude-cli/2.1.62 (external, sdk-cli)", "")
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"stream":true}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	result, err := exec.ExecuteStream(ctx, auth, req, opts)
+	if err != nil {
+		t.Fatalf("ExecuteStream returned error: %v", err)
+	}
+	// 耗尽流，确保 goroutine 中的 reporter.publish 和 ensurePublished 执行完毕。
+	for range result.Chunks {
+	}
+	if got.Detail.InputTokens != 7 {
+		t.Errorf("expected InputTokens=7, got %d — usage record not published or wrong in nativePassthrough ExecuteStream path", got.Detail.InputTokens)
+	}
+	if got.Detail.OutputTokens != 4 {
+		t.Errorf("expected OutputTokens=4, got %d — usage record not published or wrong in nativePassthrough ExecuteStream path", got.Detail.OutputTokens)
 	}
 }
