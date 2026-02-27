@@ -60,7 +60,8 @@ func (e *ClaudeExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Au
 	}
 	useAPIKey := auth != nil && auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != ""
 	isAnthropicBase := req.URL != nil && strings.EqualFold(req.URL.Scheme, "https") && strings.EqualFold(req.URL.Host, "api.anthropic.com")
-	if isAnthropicBase && useAPIKey {
+	// OAuth tokens must always use Authorization: Bearer, never x-api-key
+	if isAnthropicBase && useAPIKey && !isClaudeOAuthToken(apiKey) {
 		req.Header.Del("Authorization")
 		req.Header.Set("x-api-key", apiKey)
 	} else {
@@ -197,6 +198,11 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 			}
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		if isClaudeOAuthToken(apiKey) {
+			if beta := httpReq.Header.Get("Anthropic-Beta"); !strings.Contains(beta, "oauth") {
+				httpReq.Header.Set("Anthropic-Beta", beta+",oauth-2025-04-20")
+			}
+		}
 	}
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
@@ -401,6 +407,11 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			}
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		if isClaudeOAuthToken(apiKey) {
+			if beta := httpReq.Header.Get("Anthropic-Beta"); !strings.Contains(beta, "oauth") {
+				httpReq.Header.Set("Anthropic-Beta", beta+",oauth-2025-04-20")
+			}
+		}
 	}
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
@@ -593,6 +604,11 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 			}
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		if isClaudeOAuthToken(apiKey) {
+			if beta := httpReq.Header.Get("Anthropic-Beta"); !strings.Contains(beta, "oauth") {
+				httpReq.Header.Set("Anthropic-Beta", beta+",oauth-2025-04-20")
+			}
+		}
 	}
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
@@ -1025,7 +1041,8 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 
 	useAPIKey := auth != nil && auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != ""
 	isAnthropicBase := r.URL != nil && strings.EqualFold(r.URL.Scheme, "https") && strings.EqualFold(r.URL.Host, "api.anthropic.com")
-	if isAnthropicBase && useAPIKey {
+	// OAuth tokens must always use Authorization: Bearer, never x-api-key
+	if isAnthropicBase && useAPIKey && !isClaudeOAuthToken(apiKey) {
 		r.Header.Del("Authorization")
 		r.Header.Set("x-api-key", apiKey)
 	} else {

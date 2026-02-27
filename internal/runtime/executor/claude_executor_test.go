@@ -2395,3 +2395,213 @@ func TestClaudeExecutor_NativePassthrough_UsageRecordPublished_ExecuteStream(t *
 		t.Errorf("expected OutputTokens=4, got %d — usage record not published or wrong in nativePassthrough ExecuteStream path", got.Detail.OutputTokens)
 	}
 }
+
+// TestClaudeExecutor_NativePassthrough_OAuthBeta verifies that the oauth-2025-04-20 beta flag
+// is appended to Anthropic-Beta when absent, and not duplicated when already present.
+func TestClaudeExecutor_NativePassthrough_OAuthBeta(t *testing.T) {
+	const ua = "claude-cli/2.1.62 (external, sdk-cli)"
+	const upstreamToken = "sk-ant-oat01-test"
+
+	// Case 1: client beta does NOT contain oauth-2025-04-20 → upstream should receive it appended.
+	t.Run("AppendedWhenAbsent", func(t *testing.T) {
+		clientBeta := "claude-code-20250219,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,effort-2025-11-24,adaptive-thinking-2026-01-28"
+		wantBeta := "claude-code-20250219,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,effort-2025-11-24,adaptive-thinking-2026-01-28,oauth-2025-04-20"
+
+		t.Run("Execute", func(t *testing.T) {
+			var capturedBeta string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedBeta = r.Header.Get("Anthropic-Beta")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+			}))
+			defer server.Close()
+
+			exec := NewClaudeExecutor(&config.Config{})
+			auth := &cliproxyauth.Auth{Attributes: map[string]string{
+				"api_key":  upstreamToken,
+				"base_url": server.URL,
+			}}
+			ctx := makeGinCtxWithUA(ua, clientBeta)
+			payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+			req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+			if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+				t.Fatalf("Execute returned error: %v", err)
+			}
+			if capturedBeta != wantBeta {
+				t.Fatalf("Execute: expected upstream Anthropic-Beta=%q, got %q", wantBeta, capturedBeta)
+			}
+		})
+
+		t.Run("ExecuteStream", func(t *testing.T) {
+			var capturedBeta string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedBeta = r.Header.Get("Anthropic-Beta")
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n"))
+				_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"))
+				_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n"))
+				_, _ = w.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"))
+				_, _ = w.Write([]byte("data: {\"type\":\"message_stop\"}\n\n"))
+				_, _ = w.Write([]byte("data: [DONE]\n\n"))
+			}))
+			defer server.Close()
+
+			exec := NewClaudeExecutor(&config.Config{})
+			auth := &cliproxyauth.Auth{Attributes: map[string]string{
+				"api_key":  upstreamToken,
+				"base_url": server.URL,
+			}}
+			ctx, cancel := context.WithTimeout(makeGinCtxWithUA(ua, clientBeta), 5*time.Second)
+			defer cancel()
+
+			payload := []byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+			req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+			result, err := exec.ExecuteStream(ctx, auth, req, opts)
+			if err != nil {
+				t.Fatalf("ExecuteStream returned error: %v", err)
+			}
+			for range result.Chunks {
+			}
+			if capturedBeta != wantBeta {
+				t.Fatalf("ExecuteStream: expected upstream Anthropic-Beta=%q, got %q", wantBeta, capturedBeta)
+			}
+		})
+
+		t.Run("CountTokens", func(t *testing.T) {
+			var capturedBeta string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedBeta = r.Header.Get("Anthropic-Beta")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"input_tokens":10}`))
+			}))
+			defer server.Close()
+
+			exec := NewClaudeExecutor(&config.Config{})
+			auth := &cliproxyauth.Auth{Attributes: map[string]string{
+				"api_key":  upstreamToken,
+				"base_url": server.URL,
+			}}
+			ctx := makeGinCtxWithUA(ua, clientBeta)
+			payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+			req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+			if _, err := exec.CountTokens(ctx, auth, req, opts); err != nil {
+				t.Fatalf("CountTokens returned error: %v", err)
+			}
+			if capturedBeta != wantBeta {
+				t.Fatalf("CountTokens: expected upstream Anthropic-Beta=%q, got %q", wantBeta, capturedBeta)
+			}
+		})
+	})
+
+	// Case 2: client beta already contains oauth-2025-04-20 → upstream receives value unchanged (no duplication).
+	t.Run("NotDuplicatedWhenPresent", func(t *testing.T) {
+		clientBeta := "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14"
+
+		t.Run("Execute", func(t *testing.T) {
+			var capturedBeta string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedBeta = r.Header.Get("Anthropic-Beta")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+			}))
+			defer server.Close()
+
+			exec := NewClaudeExecutor(&config.Config{})
+			auth := &cliproxyauth.Auth{Attributes: map[string]string{
+				"api_key":  upstreamToken,
+				"base_url": server.URL,
+			}}
+			ctx := makeGinCtxWithUA(ua, clientBeta)
+			payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+			req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+			if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+				t.Fatalf("Execute returned error: %v", err)
+			}
+			if capturedBeta != clientBeta {
+				t.Fatalf("Execute: expected upstream Anthropic-Beta=%q (unchanged), got %q", clientBeta, capturedBeta)
+			}
+		})
+	})
+}
+
+// TestClaudeExecutor_OAuthTokenInConfig_UsesBearerHeader verifies that an OAuth token
+// configured as api_key (e.g., in claude-api-key YAML) is sent via Authorization: Bearer
+// instead of x-api-key, preventing the "OAuth authentication is currently not supported" error.
+func TestClaudeExecutor_OAuthTokenInConfig_UsesBearerHeader(t *testing.T) {
+	var capturedAuthHeader, capturedAPIKeyHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuthHeader = r.Header.Get("Authorization")
+		capturedAPIKeyHeader = r.Header.Get("X-Api-Key")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}],"model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	oauthToken := "sk-ant-oat01-testtoken"
+	exec := NewClaudeExecutor(&config.Config{})
+	// OAuth token stored in Attributes["api_key"] as users may do in YAML config
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  oauthToken,
+		"base_url": server.URL,
+	}}
+	ctx := makeGinCtxWithUA("some-other-client/1.0", "")
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	_, err := exec.Execute(ctx, auth, req, opts)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if capturedAPIKeyHeader != "" {
+		t.Errorf("OAuth token must not be sent via x-api-key header, got: %q", capturedAPIKeyHeader)
+	}
+	wantBearer := "Bearer " + oauthToken
+	if capturedAuthHeader != wantBearer {
+		t.Errorf("OAuth token must be sent via Authorization: Bearer, got: %q, want: %q", capturedAuthHeader, wantBearer)
+	}
+}
+
+// TestClaudeExecutor_DefaultBeta verifies that when a non-claude-cli client sends no
+// Anthropic-Beta header, the executor injects the expected default beta value reflecting
+// the current CLI 2.1.62 OAuth direct-connect feature set.
+func TestClaudeExecutor_DefaultBeta(t *testing.T) {
+	var capturedBeta string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBeta = r.Header.Get("Anthropic-Beta")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	// Non-claude-cli UA ensures nativePassthrough is NOT triggered.
+	// Empty beta header means the executor must inject its own default.
+	ctx := makeGinCtxWithUA("cursor/1.0", "")
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	wantBeta := "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,effort-2025-11-24,adaptive-thinking-2026-01-28"
+	if capturedBeta != wantBeta {
+		t.Fatalf("expected upstream Anthropic-Beta=%q, got %q", wantBeta, capturedBeta)
+	}
+}
