@@ -57,7 +57,7 @@ func TestGPT52StreamUsageInjection(t *testing.T) {
 
 	// 消费流式响应
 	chunkCount := 0
-	for chunk := range stream {
+	for chunk := range stream.Chunks {
 		if chunk.Err != nil {
 			t.Logf("Stream chunk error: %v", chunk.Err)
 		}
@@ -213,7 +213,7 @@ func TestStreamOptionsPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteStream error: %v", err)
 	}
-	for range stream {
+	for range stream.Chunks {
 	}
 
 	// 我们的代码应该强制设置 include_usage=true（覆盖用户设置）

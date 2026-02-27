@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
+	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -1939,5 +1940,197 @@ func TestClaudeExecutor_Execute_KimiToolUsePatched_WhenRequestModelIsAliasedUpst
 	})
 	if !foundThinking {
 		t.Fatalf("expected upstream assistant tool_use message to include a non-empty thinking block")
+	}
+}
+
+// makeGinCtxWithUA creates a gin test context with the given User-Agent and optional Anthropic-Beta
+// header, and returns a context.Context with the gin context embedded under key "gin".
+func makeGinCtxWithUA(ua, betaHeader string) context.Context {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	ginCtx.Request, _ = http.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ginCtx.Request.Header.Set("User-Agent", ua)
+	if betaHeader != "" {
+		ginCtx.Request.Header.Set("Anthropic-Beta", betaHeader)
+	}
+	return context.WithValue(context.Background(), "gin", ginCtx)
+}
+
+// Scenario A: claude-cli UA + OAuth token → upstream receives original tool names (no proxy_ prefix).
+func TestClaudeExecutor_NativePassthrough_BodyUnchanged(t *testing.T) {
+	var toolNames []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gjson.GetBytes(b, "tools").ForEach(func(_, v gjson.Result) bool {
+			toolNames = append(toolNames, v.Get("name").String())
+			return true
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	ctx := makeGinCtxWithUA("claude-cli/2.1.62 (external, sdk-cli)", "")
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"tools":[{"name":"Read","input_schema":{"type":"object"}},{"name":"Write","input_schema":{"type":"object"}}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	for _, name := range toolNames {
+		if name == "proxy_Read" || name == "proxy_Write" {
+			t.Fatalf("expected no proxy_ prefix on tool names for claude-cli UA, got %q in %v", name, toolNames)
+		}
+	}
+	var found bool
+	for _, name := range toolNames {
+		if name == "Read" || name == "Write" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected tool names 'Read'/'Write' in upstream request, got %v", toolNames)
+	}
+}
+
+// Scenario B: claude-cli UA + OAuth token → Anthropic-Beta header forwarded unchanged.
+func TestClaudeExecutor_NativePassthrough_BetaHeaderUnchanged(t *testing.T) {
+	clientBeta := "claude-code-20250219,oauth-2025-04-20,prompt-caching-scope-2026-01-05"
+	var capturedBeta string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBeta = r.Header.Get("Anthropic-Beta")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	ctx := makeGinCtxWithUA("claude-cli/2.1.62 (external, sdk-cli)", clientBeta)
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if capturedBeta != clientBeta {
+		t.Fatalf("expected upstream Anthropic-Beta=%q, got %q", clientBeta, capturedBeta)
+	}
+}
+
+// Scenario C: claude-cli UA + OAuth token → X-Stainless-Helper-Method not injected.
+func TestClaudeExecutor_NativePassthrough_NoStainlessHelperMethod(t *testing.T) {
+	var capturedStainless string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedStainless = r.Header.Get("X-Stainless-Helper-Method")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	ctx := makeGinCtxWithUA("claude-cli/2.1.62 (external, sdk-cli)", "")
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if capturedStainless != "" {
+		t.Fatalf("expected no X-Stainless-Helper-Method header for claude-cli UA, got %q", capturedStainless)
+	}
+}
+
+// Scenario D: claude-cli UA + OAuth token → SSE stream tool names forwarded unchanged (no prefix strip).
+func TestClaudeExecutor_NativePassthrough_StreamResponseUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","name":"proxy_Read","id":"t1"}}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	ctx, cancel := context.WithTimeout(makeGinCtxWithUA("claude-cli/2.1.62 (external, sdk-cli)", ""), 5*time.Second)
+	defer cancel()
+
+	payload := []byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	stream, err := exec.ExecuteStream(ctx, auth, req, opts)
+	if err != nil {
+		t.Fatalf("ExecuteStream returned error: %v", err)
+	}
+	var lines []string
+	for chunk := range stream.Chunks {
+		if chunk.Err != nil {
+			break
+		}
+		lines = append(lines, string(chunk.Payload))
+	}
+	combined := strings.Join(lines, "")
+	if !strings.Contains(combined, "proxy_Read") {
+		t.Fatalf("expected stream to contain 'proxy_Read' unchanged, got: %q", combined)
+	}
+}
+
+// Scenario E: non-claude-cli UA + OAuth token → proxy_ prefix applied normally (regression guard).
+func TestClaudeExecutor_NativePassthrough_ThirdPartyClientUnaffected(t *testing.T) {
+	var toolNames []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gjson.GetBytes(b, "tools").ForEach(func(_, v gjson.Result) bool {
+			toolNames = append(toolNames, v.Get("name").String())
+			return true
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "sk-ant-oat01-test",
+		"base_url": server.URL,
+	}}
+	ctx := makeGinCtxWithUA("cursor/1.0", "")
+	payload := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"tools":[{"name":"Read","input_schema":{"type":"object"}}]}`)
+	req := cliproxyexecutor.Request{Model: "claude-sonnet-4-5", Payload: payload}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	var found bool
+	for _, name := range toolNames {
+		if name == "proxy_Read" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'proxy_Read' in upstream request for non-claude-cli UA, got %v", toolNames)
 	}
 }

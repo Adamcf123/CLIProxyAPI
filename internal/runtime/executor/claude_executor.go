@@ -107,6 +107,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
+	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx))
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
 	defer reporter.finalize(ctx, &err)
@@ -114,57 +115,63 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	to := sdktranslator.FromString("claude")
 	// Use streaming translation to preserve function calling, except for claude.
 	stream := from != to
-	originalPayloadSource := req.Payload
-	if len(opts.OriginalRequest) > 0 {
-		originalPayloadSource = opts.OriginalRequest
-	}
-	originalPayload := originalPayloadSource
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, stream)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, stream)
-	body, _ = sjson.SetBytes(body, "model", baseModel)
-
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
-	if err != nil {
-		return resp, err
-	}
-
-	// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
-	// based on client type and configuration.
-	body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
-
-	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-
-	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
-	body = disableThinkingIfToolChoiceForced(body)
-
-	// Kimi Claude-compatible /v1/messages has stricter validation when thinking is enabled:
-	// - assistant tool_use history must include a non-empty thinking block
-	// - assistant tool_use messages must include non-empty reasoning_content
-	// OpenCode may emit tool_use messages without these fields.
-	body = ensureKimiToolCallThinkingBlock(requestedBaseModel, body)
-	body = ensureKimiToolCallReasoningContent(requestedBaseModel, body)
-
-	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
-	if countCacheControls(body) == 0 {
-		body = ensureCacheControl(body)
-	}
-
-	// Enforce Anthropic's cache_control block limit (max 4 breakpoints per request).
-	// Cloaking and ensureCacheControl may push the total over 4 when the client
-	// (e.g. Amp CLI) already sends multiple cache_control blocks.
-	body = enforceCacheControlLimit(body, 4)
-
-	// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
-	// A 1h-TTL block must not appear after a 5m-TTL block in evaluation order (tools→system→messages).
-	body = normalizeCacheControlTTL(body)
-
-	// Extract betas from body and convert to header
+	var bodyForTranslation, bodyForUpstream []byte
 	var extraBetas []string
-	extraBetas, body = extractAndRemoveBetas(body)
-	bodyForTranslation := body
-	bodyForUpstream := body
-	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
-		bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
+	if !nativePassthrough {
+		originalPayloadSource := req.Payload
+		if len(opts.OriginalRequest) > 0 {
+			originalPayloadSource = opts.OriginalRequest
+		}
+		originalPayload := originalPayloadSource
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, stream)
+		body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, stream)
+		body, _ = sjson.SetBytes(body, "model", baseModel)
+
+		body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
+		if err != nil {
+			return resp, err
+		}
+
+		// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
+		// based on client type and configuration.
+		body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
+
+		body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+
+		// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
+		body = disableThinkingIfToolChoiceForced(body)
+
+		// Kimi Claude-compatible /v1/messages has stricter validation when thinking is enabled:
+		// - assistant tool_use history must include a non-empty thinking block
+		// - assistant tool_use messages must include non-empty reasoning_content
+		// OpenCode may emit tool_use messages without these fields.
+		body = ensureKimiToolCallThinkingBlock(requestedBaseModel, body)
+		body = ensureKimiToolCallReasoningContent(requestedBaseModel, body)
+
+		// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
+		if countCacheControls(body) == 0 {
+			body = ensureCacheControl(body)
+		}
+
+		// Enforce Anthropic's cache_control block limit (max 4 breakpoints per request).
+		// Cloaking and ensureCacheControl may push the total over 4 when the client
+		// (e.g. Amp CLI) already sends multiple cache_control blocks.
+		body = enforceCacheControlLimit(body, 4)
+
+		// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
+		// A 1h-TTL block must not appear after a 5m-TTL block in evaluation order (tools->system->messages).
+		body = normalizeCacheControlTTL(body)
+
+		// Extract betas from body and convert to header
+		extraBetas, body = extractAndRemoveBetas(body)
+		bodyForTranslation = body
+		bodyForUpstream = body
+		if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
+			bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
+		}
+	} else {
+		bodyForTranslation = req.Payload
+		bodyForUpstream = req.Payload
 	}
 
 	url := fmt.Sprintf("%s/v1/messages?beta=true", baseURL)
@@ -172,7 +179,24 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if err != nil {
 		return resp, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
+	if !nativePassthrough {
+		applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
+	} else {
+		var ginHeaders http.Header
+		if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+			ginHeaders = ginCtx.Request.Header
+		}
+		for key, vals := range ginHeaders {
+			switch http.CanonicalHeaderKey(key) {
+			case "Content-Length", "Host", "Connection", "Transfer-Encoding":
+				continue
+			}
+			for _, v := range vals {
+				httpReq.Header.Add(key, v)
+			}
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -253,21 +277,25 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	} else {
 		reporter.publish(ctx, parseClaudeUsage(data))
 	}
-	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
+	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() && !nativePassthrough {
 		data = stripClaudeToolPrefixFromResponse(data, claudeToolPrefix)
 	}
-	var param any
-	out := sdktranslator.TranslateNonStream(
-		ctx,
-		to,
-		from,
-		req.Model,
-		opts.OriginalRequest,
-		bodyForTranslation,
-		data,
-		&param,
-	)
-	resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
+	if !nativePassthrough {
+		var param any
+		out := sdktranslator.TranslateNonStream(
+			ctx,
+			to,
+			from,
+			req.Model,
+			opts.OriginalRequest,
+			bodyForTranslation,
+			data,
+			&param,
+		)
+		resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
+	} else {
+		resp = cliproxyexecutor.Response{Payload: bytes.Clone(data), Headers: httpResp.Header.Clone()}
+	}
 	return resp, nil
 }
 
@@ -287,59 +315,66 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
+	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx))
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
 	defer reporter.trackFailure(ctx, &err)
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("claude")
-	originalPayloadSource := req.Payload
-	if len(opts.OriginalRequest) > 0 {
-		originalPayloadSource = opts.OriginalRequest
-	}
-	originalPayload := originalPayloadSource
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
-	body, _ = sjson.SetBytes(body, "model", baseModel)
-
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
-	if err != nil {
-		return nil, err
-	}
-
-	// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
-	// based on client type and configuration.
-	body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
-
-	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-
-	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
-	body = disableThinkingIfToolChoiceForced(body)
-
-	// Kimi Claude-compatible /v1/messages has stricter validation when thinking is enabled:
-	// - assistant tool_use history must include a non-empty thinking block
-	// - assistant tool_use messages must include non-empty reasoning_content
-	// OpenCode may emit tool_use messages without these fields.
-	body = ensureKimiToolCallThinkingBlock(requestedBaseModel, body)
-	body = ensureKimiToolCallReasoningContent(requestedBaseModel, body)
-
-	// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
-	if countCacheControls(body) == 0 {
-		body = ensureCacheControl(body)
-	}
-
-	// Enforce Anthropic's cache_control block limit (max 4 breakpoints per request).
-	body = enforceCacheControlLimit(body, 4)
-
-	// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
-	body = normalizeCacheControlTTL(body)
-
-	// Extract betas from body and convert to header
+	var bodyForTranslation, bodyForUpstream []byte
 	var extraBetas []string
-	extraBetas, body = extractAndRemoveBetas(body)
-	bodyForTranslation := body
-	bodyForUpstream := body
-	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
-		bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
+	if !nativePassthrough {
+		originalPayloadSource := req.Payload
+		if len(opts.OriginalRequest) > 0 {
+			originalPayloadSource = opts.OriginalRequest
+		}
+		originalPayload := originalPayloadSource
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
+		body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
+		body, _ = sjson.SetBytes(body, "model", baseModel)
+
+		body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
+		if err != nil {
+			return nil, err
+		}
+
+		// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
+		// based on client type and configuration.
+		body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
+
+		body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+
+		// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
+		body = disableThinkingIfToolChoiceForced(body)
+
+		// Kimi Claude-compatible /v1/messages has stricter validation when thinking is enabled:
+		// - assistant tool_use history must include a non-empty thinking block
+		// - assistant tool_use messages must include non-empty reasoning_content
+		// OpenCode may emit tool_use messages without these fields.
+		body = ensureKimiToolCallThinkingBlock(requestedBaseModel, body)
+		body = ensureKimiToolCallReasoningContent(requestedBaseModel, body)
+
+		// Auto-inject cache_control if missing (optimization for ClawdBot/clients without caching support)
+		if countCacheControls(body) == 0 {
+			body = ensureCacheControl(body)
+		}
+
+		// Enforce Anthropic's cache_control block limit (max 4 breakpoints per request).
+		body = enforceCacheControlLimit(body, 4)
+
+		// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
+		body = normalizeCacheControlTTL(body)
+
+		// Extract betas from body and convert to header
+		extraBetas, body = extractAndRemoveBetas(body)
+		bodyForTranslation = body
+		bodyForUpstream = body
+		if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
+			bodyForUpstream = applyClaudeToolPrefix(body, claudeToolPrefix)
+		}
+	} else {
+		bodyForTranslation = req.Payload
+		bodyForUpstream = req.Payload
 	}
 
 	url := fmt.Sprintf("%s/v1/messages?beta=true", baseURL)
@@ -347,7 +382,24 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return nil, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, true, extraBetas, e.cfg)
+	if !nativePassthrough {
+		applyClaudeHeaders(httpReq, auth, apiKey, true, extraBetas, e.cfg)
+	} else {
+		var ginHeaders http.Header
+		if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+			ginHeaders = ginCtx.Request.Header
+		}
+		for key, vals := range ginHeaders {
+			switch http.CanonicalHeaderKey(key) {
+			case "Content-Length", "Host", "Connection", "Transfer-Encoding":
+				continue
+			}
+			for _, v := range vals {
+				httpReq.Header.Add(key, v)
+			}
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -427,7 +479,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				if detail, ok := parseClaudeStreamUsage(line); ok {
 					reporter.publish(ctx, detail)
 				}
-				if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
+				if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() && !nativePassthrough {
 					line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 				}
 				// Forward the line as-is to preserve SSE format
@@ -454,7 +506,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			if detail, ok := parseClaudeStreamUsage(line); ok {
 				reporter.publish(ctx, detail)
 			}
-			if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
+			if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() && !nativePassthrough {
 				line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
 			}
 			chunks := sdktranslator.TranslateStream(
@@ -488,26 +540,32 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		baseURL = "https://api.anthropic.com"
 	}
 
+	nativePassthrough := isClaudeOAuthToken(apiKey) && isClaudeCodeClient(getClientUserAgent(ctx))
+
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("claude")
-	// Use streaming translation to preserve function calling, except for claude.
-	stream := from != to
-	body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, stream)
-	body, _ = sjson.SetBytes(body, "model", baseModel)
-
-	if !strings.HasPrefix(baseModel, "claude-3-5-haiku") {
-		body = checkSystemInstructions(body)
-	}
-
-	// Keep count_tokens requests compatible with Anthropic cache-control constraints too.
-	body = enforceCacheControlLimit(body, 4)
-	body = normalizeCacheControlTTL(body)
-
-	// Extract betas from body and convert to header (for count_tokens too)
+	var body []byte
 	var extraBetas []string
-	extraBetas, body = extractAndRemoveBetas(body)
-	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
-		body = applyClaudeToolPrefix(body, claudeToolPrefix)
+	if !nativePassthrough {
+		stream := from != to
+		body = sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, stream)
+		body, _ = sjson.SetBytes(body, "model", baseModel)
+
+		if !strings.HasPrefix(baseModel, "claude-3-5-haiku") {
+			body = checkSystemInstructions(body)
+		}
+
+		// Keep count_tokens requests compatible with Anthropic cache-control constraints too.
+		body = enforceCacheControlLimit(body, 4)
+		body = normalizeCacheControlTTL(body)
+
+		// Extract betas from body and convert to header (for count_tokens too)
+		extraBetas, body = extractAndRemoveBetas(body)
+		if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
+			body = applyClaudeToolPrefix(body, claudeToolPrefix)
+		}
+	} else {
+		body = req.Payload
 	}
 
 	url := fmt.Sprintf("%s/v1/messages/count_tokens?beta=true", baseURL)
@@ -515,7 +573,24 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
+	if !nativePassthrough {
+		applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
+	} else {
+		var ginHeaders http.Header
+		if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+			ginHeaders = ginCtx.Request.Header
+		}
+		for key, vals := range ginHeaders {
+			switch http.CanonicalHeaderKey(key) {
+			case "Content-Length", "Host", "Connection", "Transfer-Encoding":
+				continue
+			}
+			for _, v := range vals {
+				httpReq.Header.Add(key, v)
+			}
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID

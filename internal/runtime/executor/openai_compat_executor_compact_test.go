@@ -46,7 +46,7 @@ func TestOpenAICompatExecutorStreamIncludesUsageOption(t *testing.T) {
 	}
 
 	// Consume the stream
-	for range stream {
+	for range stream.Chunks {
 	}
 
 	// Verify stream_options.include_usage is set
