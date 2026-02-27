@@ -39,8 +39,8 @@ func parseSummaryLines(t *testing.T, out string) map[string]string {
 	}
 
 	lines := strings.Split(trimmed, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 summary lines, got %d: %q", len(lines), trimmed)
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 summary lines, got %d: %q", len(lines), trimmed)
 	}
 
 	parsed := make(map[string]string, len(lines))
@@ -85,6 +85,64 @@ func TestStartLiveDisplay_StopPrintsSummaryLines(t *testing.T) {
 	}
 	if parsed["tps_avg"] != "--" {
 		t.Fatalf("expected tps_avg=--, got %q", parsed["tps_avg"])
+	}
+}
+
+func TestPrintSummary_IncludesProviderAndModel(t *testing.T) {
+	out := captureStderr(t, func() {
+		state := NewRequestState(true, "claude-sonnet-4-6")
+		state.SetProvider("claude")
+		PrintSummary(state)
+	})
+
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" {
+		t.Fatal("expected summary output, got empty")
+	}
+
+	lines := strings.Split(trimmed, "\n")
+
+	// Find indices for provider, model, and request_count lines.
+	providerIdx := -1
+	modelIdx := -1
+	requestCountIdx := -1
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "metrics_summary provider="):
+			providerIdx = i
+		case strings.HasPrefix(line, "metrics_summary model="):
+			modelIdx = i
+		case strings.HasPrefix(line, "metrics_summary request_count="):
+			requestCountIdx = i
+		}
+	}
+
+	if providerIdx == -1 {
+		t.Fatalf("expected a 'metrics_summary provider=claude' line in output:\n%s", trimmed)
+	}
+	if modelIdx == -1 {
+		t.Fatalf("expected a 'metrics_summary model=claude-sonnet-4-6' line in output:\n%s", trimmed)
+	}
+	if requestCountIdx == -1 {
+		t.Fatalf("expected a 'metrics_summary request_count=...' line in output:\n%s", trimmed)
+	}
+
+	// Verify exact values.
+	expectedProvider := "metrics_summary provider=claude"
+	if lines[providerIdx] != expectedProvider {
+		t.Fatalf("expected %q, got %q", expectedProvider, lines[providerIdx])
+	}
+	expectedModel := "metrics_summary model=claude-sonnet-4-6"
+	if lines[modelIdx] != expectedModel {
+		t.Fatalf("expected %q, got %q", expectedModel, lines[modelIdx])
+	}
+
+	// Verify provider and model appear before request_count.
+	if providerIdx >= requestCountIdx {
+		t.Fatalf("provider line (index %d) must appear before request_count line (index %d)", providerIdx, requestCountIdx)
+	}
+	if modelIdx >= requestCountIdx {
+		t.Fatalf("model line (index %d) must appear before request_count line (index %d)", modelIdx, requestCountIdx)
 	}
 }
 
