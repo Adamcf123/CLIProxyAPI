@@ -5,6 +5,7 @@ export MANAGEMENT_KEY="<MANAGEMENT_KEY>"
 export API_KEY="sk-dummy"
 http://localhost:53355/management.html
 
+
 \\wsl.localhost\Ubuntu\home\adam\projects\CLIProxyAPI
 ./cli-proxy-api
 go build -o cli-proxy-api ./cmd/server
@@ -14,8 +15,8 @@ export ANTHROPIC_MODEL=gpt-5.3-codex
 export ANTHROPIC_MODEL=minimax-m2.5
 export ANTHROPIC_MODEL=glm-5
 export ANTHROPIC_MODEL=glm-5-no-think
-export ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
-export ANTHROPIC_MODEL=claude-opus-4-5-20251101
+export ANTHROPIC_MODEL=claude-sonnet-4-6
+export ANTHROPIC_MODEL=claude-opus-4-6
 
 export ANTHROPIC_MODEL=gemini-3-flash-preview
 
