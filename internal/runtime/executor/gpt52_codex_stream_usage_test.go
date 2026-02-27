@@ -52,7 +52,7 @@ func TestGPT52CodexStreamRequestAndUsage(t *testing.T) {
 	}
 
 	chunkCount := 0
-	for chunk := range stream {
+	for chunk := range stream.Chunks {
 		if chunk.Err != nil {
 			t.Fatalf("stream error chunk: %v", chunk.Err)
 		}
@@ -118,7 +118,7 @@ func TestGPT52ResponsesStreamRequestAndUsage(t *testing.T) {
 	}
 
 	chunkCount := 0
-	for chunk := range stream {
+	for chunk := range stream.Chunks {
 		if chunk.Err != nil {
 			t.Fatalf("stream error chunk: %v", chunk.Err)
 		}
