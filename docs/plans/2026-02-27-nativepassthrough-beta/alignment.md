@@ -56,6 +56,7 @@ claude_executor.go:526-541（CountTokens）
 claude-code-20250219,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,effort-2025-11-24,adaptive-thinking-2026-01-28
 （无 oauth-2025-04-20）
 ```
+**实测验证**：2026-02-27 mitmdump 反向代理抓包（CLI 2.1.62，API-key 模式连接代理 53355），确认上述值准确。
 
 #### CLI 在 OAuth 原生模式发送的 beta（直连 Anthropic 时，2.1.62 抓包）
 ```
