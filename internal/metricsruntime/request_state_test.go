@@ -2,7 +2,6 @@ package metricsruntime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -227,7 +226,7 @@ func TestMaybeRecordFirstContentToken_MultipleEventsInOneChunkCountsBoth(t *test
 	}
 }
 
-func TestPrintSummary_TTFTFallbackWithoutMetrics(t *testing.T) {
+func TestPrintSummary_OnlyPrintsE2ESummaryLines(t *testing.T) {
 	state := NewRequestState(true, "gpt-5.2")
 	state.SetProvider("openai")
 	state.StartedAt = time.Unix(100, 0)
@@ -248,22 +247,23 @@ func TestPrintSummary_TTFTFallbackWithoutMetrics(t *testing.T) {
 	_ = w.Close()
 	out, _ := io.ReadAll(r)
 
-	line := strings.TrimSpace(string(out))
-	if !strings.HasPrefix(line, "metrics_summary ") {
-		t.Fatalf("expected metrics_summary prefix, got %q", line)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 summary lines, got %d: %q", len(lines), string(out))
 	}
-	jsonPart := strings.TrimPrefix(line, "metrics_summary ")
-
-	var m map[string]any
-	if err := json.Unmarshal([]byte(jsonPart), &m); err != nil {
-		t.Fatalf("unmarshal summary JSON: %v\nraw=%q", err, jsonPart)
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "metrics_summary ") {
+			t.Fatalf("expected metrics_summary prefix, got %q", line)
+		}
 	}
-	got, ok := m["ttft"].(float64)
-	if !ok {
-		t.Fatalf("expected ttft to be a number, got %T (%v)", m["ttft"], m["ttft"])
+	if lines[0] != "metrics_summary request_count=0" {
+		t.Fatalf("unexpected request_count line: %q", lines[0])
 	}
-	if got < 1.49 || got > 1.51 {
-		t.Fatalf("expected ttft about 1.5, got %v", got)
+	if lines[1] != "metrics_summary time_window=10m" {
+		t.Fatalf("unexpected time_window line: %q", lines[1])
+	}
+	if lines[2] != "metrics_summary tps_avg=--" {
+		t.Fatalf("unexpected tps_avg line: %q", lines[2])
 	}
 }
 
