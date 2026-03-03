@@ -2200,13 +2200,13 @@ func TestClaudeExecutor_NativePassthrough_ThirdPartyClientUnaffected(t *testing.
 	}
 	var found bool
 	for _, name := range toolNames {
-		if name == "proxy_Read" {
+		if name == "Read" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected 'proxy_Read' in upstream request for non-claude-cli UA, got %v", toolNames)
+		t.Fatalf("expected 'Read' (no prefix) in upstream request for non-claude-cli UA, got %v", toolNames)
 	}
 }
 
@@ -2600,7 +2600,7 @@ func TestClaudeExecutor_DefaultBeta(t *testing.T) {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 
-	wantBeta := "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,effort-2025-11-24,adaptive-thinking-2026-01-28"
+	wantBeta := "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05"
 	if capturedBeta != wantBeta {
 		t.Fatalf("expected upstream Anthropic-Beta=%q, got %q", wantBeta, capturedBeta)
 	}
