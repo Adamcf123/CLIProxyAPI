@@ -1333,7 +1333,7 @@ func TestClaudeExecutor_Execute_KimiToolUsePatched_WhenRequestModelIsAliasedUpst
 
 	exec := NewClaudeExecutor(&config.Config{})
 	auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
-	payload := []byte(`{"model":"kimi-for-coding","max_tokens":1,"stream":false,"thinking":{"type":"enabled","budget_tokens":10},"tools":[{"name":"my_tool","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"},"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"my_tool","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}]}`)
+	payload := []byte(`{"model":"kimi-for-coding","max_tokens":1,"stream":false,"thinking":{"type":"enabled","budget_tokens":1024},"tools":[{"name":"my_tool","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"},"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"my_tool","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}]}`)
 	req := cliproxyexecutor.Request{Model: "moonshotai/kimi-k2.5", Payload: payload}
 	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude"), OriginalRequest: payload}
 

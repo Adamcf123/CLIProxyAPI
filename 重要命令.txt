@@ -10,7 +10,7 @@ http://localhost:53355/management.html
 ./cli-proxy-api
 go build -o cli-proxy-api ./cmd/server
 
-export ANTHROPIC_MODEL=gpt-5.3
+export ANTHROPIC_MODEL=gpt-5.4
 export ANTHROPIC_MODEL=gpt-5.3-codex
 export ANTHROPIC_MODEL=minimax-m2.5
 export ANTHROPIC_MODEL=glm-5
