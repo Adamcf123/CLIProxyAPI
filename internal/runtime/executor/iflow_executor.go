@@ -32,6 +32,10 @@ const (
 )
 
 // IFlowExecutor executes OpenAI-compatible chat completions against the iFlow API using API keys derived from OAuth.
+//
+// NOTE: This repo does not use iFlow. The IFlowExecutor exists for completeness but is ignored.
+// MiniMax models in this repo use Anthropic API format (claude executor) with Claude-style thinking config.
+// Do not route MiniMax models to IFlowExecutor; they belong to ClaudeExecutor via /v1/messages endpoint.
 type IFlowExecutor struct {
 	cfg *config.Config
 }
