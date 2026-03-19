@@ -126,6 +126,10 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		originalPayload := originalPayloadSource
 		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, stream)
 		body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, stream)
+		if minimaxBody, ok := maybeBuildMiniMaxAnthropicCodexResponseRequest(baseURL, from, baseModel, originalPayload, stream); ok {
+			body = minimaxBody
+			originalTranslated = minimaxBody
+		}
 		body, _ = sjson.SetBytes(body, "model", baseModel)
 
 		body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
@@ -338,6 +342,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		originalPayload := originalPayloadSource
 		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
 		body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
+		if minimaxBody, ok := maybeBuildMiniMaxAnthropicCodexResponseRequest(baseURL, from, baseModel, originalPayload, true); ok {
+			body = minimaxBody
+			originalTranslated = minimaxBody
+		}
 		body, _ = sjson.SetBytes(body, "model", baseModel)
 
 		body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
