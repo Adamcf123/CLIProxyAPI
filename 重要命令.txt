@@ -12,16 +12,18 @@ go build -o cli-proxy-api ./cmd/server
 
 export ANTHROPIC_MODEL=gpt-5.4
 export ANTHROPIC_MODEL=gpt-5.3-codex
-export ANTHROPIC_MODEL=minimax-m2.5
-export ANTHROPIC_MODEL=glm-5
-export ANTHROPIC_MODEL=glm-5-no-think
+export ANTHROPIC_MODEL=MiniMax-M2.7-highspeed
+export ANTHROPIC_MODEL=glm-5-turbo
+export ANTHROPIC_MODEL=glm-5-turbo-no-think
 export ANTHROPIC_MODEL=claude-sonnet-4-6
-export ANTHROPIC_MODEL=claude-opus-4-6
+export ANTHROPIC_MODEL=claude-opus-4-6[1m]
 
 export ANTHROPIC_MODEL=gemini-3-flash-preview
 
 export ANTHROPIC_MODEL=kimi-for-coding
 export ANTHROPIC_MODEL=kimi-k2.5
+
+/model glm-5
 
 Cliproxyapi-codex/gpt-5.2
 
